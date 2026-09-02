@@ -26,7 +26,10 @@ uint8_t Int_nRF24L01P_check(void)
 void Int_nRF24L01P_Init(void)
 {
 	HAL_Delay(200); // 上电后等待nRF24L01P芯片稳定
-	while(Int_nRF24L01P_check()!=0)
+	// 增加超时: 若SPI/上电时序异常导致check一直失败, 重试200次(约2s)后放行,
+	// 避免飞控永久卡死在初始化, 否则先开遥控器后开飞机时可能一直连不上
+	uint16_t retry = 200;
+	while(Int_nRF24L01P_check()!=0 && retry--)
 	{
 		HAL_Delay(10);
 	}

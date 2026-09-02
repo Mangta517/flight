@@ -36,6 +36,9 @@ void calibrate_joystick(uint8_t calib_thr)
         rol_sum += joystick_value.rol - 500;
         vTaskDelay(10);
     }
+    // 校准结果提交偏移量: 与 process_joystick_data 内读取偏移量共用同一把锁,
+    // 防止摇杆任务读到"改了一半"的混合偏移(此处未嵌套持锁,前面的锁早已释放)
+    xSemaphoreTake(joystick_mutex, portMAX_DELAY);
     if (calib_thr)
     {
         thr_offset += thr_sum / 10;
@@ -43,6 +46,7 @@ void calibrate_joystick(uint8_t calib_thr)
     yaw_offset += yaw_sum / 10;
     pit_offset += pit_sum / 10;
     rol_offset += rol_sum / 10;
+    xSemaphoreGive(joystick_mutex);
 
 }
 
@@ -108,12 +112,13 @@ void process_joystick_data(void)
     joystick_value.pit = com_limit(joystick_value.pit, 0, 1000); // 俯仰范围限制在0到1000
     joystick_value.rol = com_limit(joystick_value.rol, 0, 1000); // 横滚范围限制在0到1000
 
-    xSemaphoreGive(joystick_mutex); // 释放互斥锁
-    // 将摇杆数据赋值给遥控数据结构体
+    // 将摇杆数据赋值给遥控数据结构体(锁内发布;读方持同一把锁即可读到完整一致的一组值)
     remote_data_value.thr = joystick_value.thr;
     remote_data_value.yaw = joystick_value.yaw;
     remote_data_value.pit = joystick_value.pit;
     remote_data_value.rol = joystick_value.rol;
+
+    xSemaphoreGive(joystick_mutex); // 释放互斥锁
 
     //debug_printf(":%d,%d,%d,%d\n", joystick_value.yaw, joystick_value.thr, joystick_value.rol, joystick_value.pit);
 }

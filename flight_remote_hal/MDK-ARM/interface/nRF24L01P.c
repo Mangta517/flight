@@ -26,7 +26,9 @@ uint8_t Int_nRF24L01P_check(void)
 void Int_nRF24L01P_Init(void)
 {
 	HAL_Delay(200); // 上电后等待nRF24L01P芯片稳定
-	while(Int_nRF24L01P_check()!=0)
+	// 增加超时: 避免SPI/上电时序异常时永久卡死初始化
+	uint16_t retry = 200;
+	while(Int_nRF24L01P_check()!=0 && retry--)
 	{
 		HAL_Delay(10);
 	}

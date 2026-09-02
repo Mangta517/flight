@@ -2,6 +2,8 @@
 #include <stdio.h>
 
 extern remote_data remote_data_value;
+// 摇杆数据互斥锁(定义在application_freertos_task.c; 显示任务与写方共用同一把锁)
+extern SemaphoreHandle_t joystick_mutex;
 // 飞控回传的MPU6050欧拉角(单位0.01°,定义在application_transmit_data.c)
 extern int16_t imu_pitch;
 extern int16_t imu_roll;
@@ -65,6 +67,19 @@ void app_OLED_Show(void)
     static int16_t s_thr = -1, s_rol = -1, s_pit = -1, s_yaw = -1; // 上次显示的值(-1=首次)
     static uint8_t s_first = 1;                                    // 静态内容标志
     uint8_t count = 0;
+    remote_data remote_snapshot;   // 本帧显示快照(锁内整拷)
+    int16_t imu_p, imu_r, imu_y;   // 欧拉角本帧快照
+
+    // 快照: 显示全程只读局部副本,避免与写方交错读到混合值。
+    // 与写方(摇杆/按键任务)共用 joystick_mutex,锁内仅做几微秒结构体整拷即释放,
+    // 后续刷屏等慢操作全部在锁外进行。imu_* 由发送任务无锁写(16位原子,不会撕裂),
+    // 连续读取三次即可,至多滞后一帧,显示可接受。
+    xSemaphoreTake(joystick_mutex, portMAX_DELAY);
+    remote_snapshot = remote_data_value;
+    xSemaphoreGive(joystick_mutex);
+    imu_p = imu_pitch;
+    imu_r = imu_roll;
+    imu_y = imu_yaw;
 
     // 静态内容只画一次：标题、信道、四个通道标签
     if (s_first)
@@ -90,15 +105,15 @@ void app_OLED_Show(void)
     // 第二行信道右侧: 显示飞控MPU6050欧拉角(0.01° → 显示整数度, 固定4字符宽)
     {
         static int16_t s_imu_p = 0x7FFF, s_imu_r = 0x7FFF, s_imu_y = 0x7FFF;
-        app_oled_show_angle(30, Y1, imu_pitch, &s_imu_p, 0);
-        app_oled_show_angle(66, Y1, imu_roll,  &s_imu_r, 0);
-        app_oled_show_angle(102, Y1, imu_yaw,  &s_imu_y, 1); // yaw归一化±180°
+        app_oled_show_angle(30, Y1, imu_p, &s_imu_p, 0);
+        app_oled_show_angle(66, Y1, imu_r,  &s_imu_r, 0);
+        app_oled_show_angle(102, Y1, imu_y,  &s_imu_y, 1); // yaw归一化±180°
     }
 
     // 第三行展示遥控数据=》THR ROL（数值变化才重绘）
-    if (remote_data_value.thr != s_thr)
+    if (remote_snapshot.thr != s_thr)
     {
-        s_thr = remote_data_value.thr;
+        s_thr = remote_snapshot.thr;
         if (s_thr > 500)
         {
             count = (s_thr - 500) / 41;
@@ -122,9 +137,9 @@ void app_OLED_Show(void)
         }
     }
 
-    if (remote_data_value.rol != s_rol)
+    if (remote_snapshot.rol != s_rol)
     {
-        s_rol = remote_data_value.rol;
+        s_rol = remote_snapshot.rol;
         if (s_rol > 500)
         {
             count = (s_rol - 500) / 41;
@@ -140,9 +155,9 @@ void app_OLED_Show(void)
     }
 
     // 第四行展示遥控数据=》PIT YAW（数值变化才重绘）
-    if (remote_data_value.pit != s_pit)
+    if (remote_snapshot.pit != s_pit)
     {
-        s_pit = remote_data_value.pit;
+        s_pit = remote_snapshot.pit;
         if (s_pit > 500)
         {
             count = (s_pit - 500) / 41;
@@ -157,9 +172,9 @@ void app_OLED_Show(void)
         }
     }
 
-    if (remote_data_value.yaw != s_yaw)
+    if (remote_snapshot.yaw != s_yaw)
     {
-        s_yaw = remote_data_value.yaw;
+        s_yaw = remote_snapshot.yaw;
         if (s_yaw > 500)
         {
             count = (s_yaw - 500) / 41;

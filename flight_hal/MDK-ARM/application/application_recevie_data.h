@@ -12,7 +12,9 @@
 #define FRAME_HEADER3 'f'
 
 //最大重试次数
-#define  MAX_RETRY_COUNT 5
+// 原值5(≈50ms)对遥控器"发→等回复(20ms)→再发"的节奏过紧, 推油门时易误判失联闪故障灯。
+// 放宽到8(≈80ms), 留足余量; 仍能在数秒内可靠识别真正失联。
+#define  MAX_RETRY_COUNT 8
 //
 
 typedef struct

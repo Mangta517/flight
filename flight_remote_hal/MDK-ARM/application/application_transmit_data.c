@@ -1,5 +1,8 @@
 #include "application_transmit_data.h"
 
+// 摇杆数据互斥锁(定义在application_freertos_task.c; 发送任务与写方共用同一把锁)
+extern SemaphoreHandle_t joystick_mutex;
+
 
 uint8_t transmit_buf[TX_PLOAD_WIDTH] = {0};        // 32 bytes payload width for TX
 uint8_t post_buff[TX_PLOAD_WIDTH] = {0};        // 32 bytes payload width for post-processing
@@ -19,25 +22,26 @@ void application_transmit_data(void)
     transmit_buf[0] = FRAME_HEADER1;
     transmit_buf[1] = FRAME_HEADER2;
     transmit_buf[2] = FRAME_HEADER3;
+    // 与写方(摇杆/按键任务)共用 joystick_mutex: 锁内一次性整拷快照并清零命令位
+    // (取代原先的关中断临界区),保证整帧数据来自同一次提交;
+    // 打包/校验/收发等耗时操作全部在锁外进行
+    xSemaphoreTake(joystick_mutex, portMAX_DELAY);
+    remote_data local = remote_data_value; // 整拷快照
+    remote_data_value.shutdown = 0;        // 发送完成后清零，避免持续发送同一个关机命令
+    remote_data_value.fix_high = 0;        // 发送完成后重置定高开关状态
+    xSemaphoreGive(joystick_mutex);
+
     //高8位在前
-    transmit_buf[3] = (remote_data_value.thr >> 8) & 0xFF;
-    transmit_buf[4] = remote_data_value.thr & 0xFF;
-   
-    transmit_buf[5] = (remote_data_value.yaw >> 8) & 0xFF;
-    transmit_buf[6] = remote_data_value.yaw & 0xFF;
-
-    transmit_buf[7] = (remote_data_value.pit >> 8) & 0xFF;
-    transmit_buf[8] = remote_data_value.pit & 0xFF;
-
-    transmit_buf[9] = (remote_data_value.rol >> 8) & 0xFF;
-    transmit_buf[10] = remote_data_value.rol & 0xFF;
-
-    taskENTER_CRITICAL();
-    transmit_buf[11] = remote_data_value.shutdown; // 关机切换命令
-    transmit_buf[12] = remote_data_value.fix_high; // 定高开关
-    remote_data_value.shutdown = 0; // 发送完成后清零，避免持续发送同一个关机命令
-    remote_data_value.fix_high=0; // 发送完成后重置定高开关状态
-    taskEXIT_CRITICAL();
+    transmit_buf[3] = (local.thr >> 8) & 0xFF;
+    transmit_buf[4] = local.thr & 0xFF;
+    transmit_buf[5] = (local.yaw >> 8) & 0xFF;
+    transmit_buf[6] = local.yaw & 0xFF;
+    transmit_buf[7] = (local.pit >> 8) & 0xFF;
+    transmit_buf[8] = local.pit & 0xFF;
+    transmit_buf[9] = (local.rol >> 8) & 0xFF;
+    transmit_buf[10] = local.rol & 0xFF;
+    transmit_buf[11] = local.shutdown; // 关机切换命令
+    transmit_buf[12] = local.fix_high; // 定高开关
 
     for(int i=0;i<TX_PLOAD_WIDTH-4;i++)
     {
@@ -63,7 +67,7 @@ void application_transmit_data(void)
             {
                 got_reply = 1; // 收到飞控回复
             }
-            else if ((HAL_GetTick() - wait_start) >= 20U)
+            else if ((HAL_GetTick() - wait_start) >= 10U)
             {
                 break;         // 超时未收到回复，继续下一轮发送，不阻塞任务
             }

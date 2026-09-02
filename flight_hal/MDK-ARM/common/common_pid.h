@@ -16,6 +16,11 @@ typedef struct {
     float integral_limit;
     float output;
     float dt;          // 实际控制周期(s)，每次计算前由调用方设置
+    // 以下为成熟PID实现新增字段
+    float d_lpf;       // D项低通滤波输出(抑制微分噪声放大)
+    float d_lpf_coef;  // D项低通系数 0~1, 0=不滤波, 1=完全不滤(仅作默认)
+    float output_limit;// 输出限幅(绝对值), 0=不限幅
+    uint8_t init;      // 首拍初始化标志(避免首拍D项冲击)
 } pid_struct;
 
 void com_pid_calc(pid_struct *pid);

@@ -74,7 +74,9 @@ static float app_stick_to_angle(int16_t raw)
     {
         cmd = 0;
     }
-    return cmd / 50.0f;
+    // 满杆增益: 原50 → 满杆仅±9.7°(自稳模式打杆几乎无姿态变化)。
+    // 改16 → 满杆(485) ≈ ±30°, 与成熟飞控(Betaflight默认30°)一致。
+    return cmd / 16.0f;
 }
 
 extern TaskHandle_t flight_remote_control_handle;
@@ -93,18 +95,24 @@ static int16_t app_flight_limit_motor_speed(float speed)
     return (int16_t)speed;
 }
 
-//俯仰角PID
-pid_struct pitch_pid={.kp=2.5,.ki=0,.kd=0.3,.integral_limit=5000};
-//Y轴角速度，对应俯仰角内环PID
-pid_struct gyro_y_pid={.kp=1.5,.ki=0,.kd=0.18,.integral_limit=10000};
+//俯仰角PID(外环角度环: PD, 积分不用在角度环避免振荡)
+pid_struct pitch_pid={.kp=2.5,.ki=0,.kd=0.3,.integral_limit=5000,
+                      .d_lpf_coef=0.5f,.output_limit=120.0f};
+//Y轴角速度，对应俯仰角内环PID(角速度环: PID, 积分消除恒定干扰)
+pid_struct gyro_y_pid={.kp=1.5,.ki=0.5,.kd=0.18,.integral_limit=500,
+                       .d_lpf_coef=0.5f,.output_limit=500.0f};
 //横滚角PID
-pid_struct roll_pid={.kp=2.5,.ki=0,.kd=0.3,.integral_limit=5000};
+pid_struct roll_pid={.kp=2.5,.ki=0,.kd=0.3,.integral_limit=5000,
+                     .d_lpf_coef=0.5f,.output_limit=120.0f};
 //X轴角速度，对应横滚角内环PID
-pid_struct gyro_x_pid={.kp=1.5,.ki=0,.kd=0.18,.integral_limit=10000};
+pid_struct gyro_x_pid={.kp=1.5,.ki=0.5,.kd=0.18,.integral_limit=500,
+                       .d_lpf_coef=0.5f,.output_limit=500.0f};
 //偏航角PID
-pid_struct yaw_pid={.kp=0.5,.ki=0,.kd=0.5,.integral_limit=5000};
+pid_struct yaw_pid={.kp=0.5,.ki=0,.kd=0.5,.integral_limit=5000,
+                    .d_lpf_coef=0.5f,.output_limit=120.0f};
 //Z轴角速度，对应偏航角内环PID
-pid_struct gyro_z_pid={.kp=0.5,.ki=0,.kd=0,.integral_limit=10000};
+pid_struct gyro_z_pid={.kp=0.5,.ki=0.5,.kd=0,.integral_limit=500,
+                       .d_lpf_coef=0.5f,.output_limit=500.0f};
 
 //定高PID
 pid_struct height_pid={.kp=0.3,.ki=0,.kd=0.5,.integral_limit=5000};
@@ -162,7 +170,18 @@ yaw_sum+=(accel_gyro_data.Gyro.Gyro_z*2000.0/32767.0)*0.002;
 euler_angle.yaw=yaw_sum;
  */
 //使用移植的四元数解算
-Common_IMU_GetEulerAngle(&accel_gyro_data,&euler_angle,0.002);
+// 用实测控制周期替代硬编码0.002: I2C读取+气压计+遥控抢占会导致实际周期波动,
+// 固定dt会让四元数积分漂移, 姿态估计与实际姿态偏差 → 飞控"以为飞机歪了"乱修正
+{
+    static TickType_t s_last_imu_tick = 0;
+    TickType_t now = xTaskGetTickCount();
+    float imu_dt = (s_last_imu_tick == 0) ? PID_Period
+                                          : ((float)(now - s_last_imu_tick)) / 1000.0f;
+    s_last_imu_tick = now;
+    if (imu_dt < 0.0005f) imu_dt = 0.0005f;   // 下限0.5ms, 防除零/跳变
+    if (imu_dt > 0.02f)   imu_dt = 0.02f;     // 上限20ms, 防长时间卡死
+    Common_IMU_GetEulerAngle(&accel_gyro_data,&euler_angle,imu_dt);
+}
 
 //debug_printf(":%.2f,%.2f,%.2f\n",euler_angle.pitch,euler_angle.roll,euler_angle.yaw);
 }

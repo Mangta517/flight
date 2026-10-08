@@ -3,16 +3,14 @@
 
 #include "main.h"
 
-
-typedef struct 
+typedef struct
 {
-   GPIO_TypeDef *GPIOx;
-   uint16_t GPIO_Pin;
-   
-}led_struct;
+    GPIO_TypeDef *GPIOx;
+    uint16_t GPIO_Pin;
+
+} led_struct;
 
 void led_on(led_struct *led);
 void led_off(led_struct *led);
 void led_toggle(led_struct *led);
 #endif
-

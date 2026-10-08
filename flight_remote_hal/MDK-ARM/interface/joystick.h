@@ -17,7 +17,4 @@ void Joystick_Init(void);
 //获取ADC摇杆的值
 
 void Joystick_GetValue(Joystick_struct *joystick_value);
-#endif 
-
-
-
+#endif

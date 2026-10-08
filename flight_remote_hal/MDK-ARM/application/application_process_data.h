@@ -5,14 +5,14 @@
 #include "key.h"
 #include "commob_tool.h"
 #include "FreeRTOS.h"
-#include "task.h"    
+#include "task.h"
 #include "semphr.h"
 typedef struct
 {
-    int16_t thr; // 油门
-    int16_t yaw; // 航向
-    int16_t pit; // 俯仰
-    int16_t rol; // 横滚
+    int16_t thr;      // 油门
+    int16_t yaw;      // 航向
+    int16_t pit;      // 俯仰
+    int16_t rol;      // 横滚
     uint8_t shutdown; // 关机开关,1关机，0开机
     uint8_t fix_high; // 定高开关，1切换定高开关状态，0不切换
 } remote_data;
@@ -24,4 +24,3 @@ void process_joystick_data(void);
 //calib_thr: 1=同时校准油门零点(手动校准,要求油门推到底); 0=不校准油门(自动校准)
 void calibrate_joystick(uint8_t calib_thr);
 #endif
-

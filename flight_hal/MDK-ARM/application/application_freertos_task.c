@@ -9,7 +9,7 @@ extern int32_t spl006_temperature;
 extern int32_t spl006_compensated_pressure;
 
 int32_t fix_height_pressure;
-//内存管理=》c语言中的结构体一般保存在堆中，不会自动释放。解决方法，使用同一个结构体循环使用
+// 下列全局结构体具有静态存储期，整个程序运行期间复用，不涉及动态堆分配
 //电机结构体
 /* ============================================================
  * 电机布局（TOP 侧 = 机头/前）
@@ -32,30 +32,38 @@ motor_struct motor_right_top = {.htim = &htim2, .channel = TIM_CHANNEL_2, .speed
 motor_struct motor_right_down = {.htim = &htim2, .channel = TIM_CHANNEL_1, .speed = 0};
 motor_struct motor_left_down = {.htim = &htim2, .channel = TIM_CHANNEL_4, .speed = 0};
 //LED结构体
-led_struct led_1_1={.GPIOx=LED1_1_GPIO_Port, .GPIO_Pin=LED1_1_Pin};
-led_struct led_1_2={.GPIOx=LED1_2_GPIO_Port, .GPIO_Pin=LED1_2_Pin};
-
-
+led_struct led_1_1 = {.GPIOx = LED1_1_GPIO_Port, .GPIO_Pin = LED1_1_Pin};
+led_struct led_1_2 = {.GPIOx = LED1_2_GPIO_Port, .GPIO_Pin = LED1_2_Pin};
 
 //表示连接状态
-Remote_State remote_state=REMOTE_DISCONNECTED;
+Remote_State remote_state = REMOTE_DISCONNECTED;
 
 //表示飞行状态
-Flight_State flight_state=IDLE;
+Flight_State flight_state = IDLE;
 
-volatile remote_data remote_data_receive={.thr=0,.yaw=500,.pit=500,.roll=500,.shutdown=0,.fix_height=0}; // 定义一个全局变量来保存接收到的遥控器数据
+volatile remote_data remote_data_receive = {.thr = 0,
+                                            .yaw = 500,
+                                            .pit = 500,
+                                            .roll = 500,
+                                            .shutdown = 0,
+                                            .fix_height = 0}; // 定义一个全局变量来保存接收到的遥控器数据
 void application_freertos_start(void)
 {
-//1.创建飞行任务
-xTaskCreate(flight_task, "flight_task", FLIGHT_TASK_STACK_SIZE, NULL, FLIGHT_TASK_PRIORITY, &flight_task_handle);
-//2.创建led任务
-xTaskCreate(led_task, "led_task", LED_TASK_STACK_SIZE, NULL,LED_TASK_PRIORITY,&led_task_handle);
-//3.创建遥控器控制任务
-xTaskCreate(flight_remote_control_task, "flight_remote_control_task",flight_remote_control_TASK_STACK_SIZE, NULL, flight_remote_control_PRIORITY, &flight_remote_control_handle);
-//4.创建电源任务
-xTaskCreate(power_task,"power_task",power_task_STACK_SIZE,NULL,power_task_PRIORITY,&power_task_handle);
-//2.启动调度器
-vTaskStartScheduler();
+    //1.创建飞行任务
+    xTaskCreate(flight_task, "flight_task", FLIGHT_TASK_STACK_SIZE, NULL, FLIGHT_TASK_PRIORITY, &flight_task_handle);
+    //2.创建led任务
+    xTaskCreate(led_task, "led_task", LED_TASK_STACK_SIZE, NULL, LED_TASK_PRIORITY, &led_task_handle);
+    //3.创建遥控器控制任务
+    xTaskCreate(flight_remote_control_task,
+                "flight_remote_control_task",
+                flight_remote_control_TASK_STACK_SIZE,
+                NULL,
+                flight_remote_control_PRIORITY,
+                &flight_remote_control_handle);
+    //4.创建电源任务
+    xTaskCreate(power_task, "power_task", power_task_STACK_SIZE, NULL, power_task_PRIORITY, &power_task_handle);
+    //5.启动调度器
+    vTaskStartScheduler();
 }
 //关机函数
 void shutdown_task(void)
@@ -65,18 +73,16 @@ void shutdown_task(void)
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
-   
 }
 
 void open_task(void)
 {
 
-   /*  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 100);
+    /*  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 100);
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 100);
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 100);
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 100); */
     //remote_state = REMOTE_CONNECTED;
-  
 }
 
 void power_task(void *parameter)
@@ -112,7 +118,7 @@ void flight_task(void *parameter)
 
     {
         // 遥控器连接成功(断开->连接跳变沿)后，进行MPU6050零偏校准
-        // 校准会阻塞本任务约0.6s，此时飞行状态仍为IDLE且电机速度为0，安全
+        // 校准会阻塞本任务：稳定判定最多尝试 500 次，再采集 100 组数据；具体耗时取决于 I2C 和调度
         if (remote_state == REMOTE_CONNECTED && last_remote_state != REMOTE_CONNECTED)
         {
             // 调试确认: 打印配平角x10,验证固件是否包含 PITCH_TRIM_DEG 修改
@@ -122,7 +128,7 @@ void flight_task(void *parameter)
         }
         last_remote_state = remote_state;
         // 电机启动
-       /*  motor_start(&motor_left_top);
+        /*  motor_start(&motor_left_top);
         motor_start(&motor_right_top);
         motor_start(&motor_right_down);
         motor_start(&motor_left_down); */
@@ -138,12 +144,12 @@ void flight_task(void *parameter)
             static uint8_t still_cnt = 0;
             static int32_t trim_sum_x = 0, trim_sum_y = 0, trim_sum_z = 0;
             static uint16_t trim_cnt = 0;
-            if (abs(accel_gyro_data.Gyro.Gyro_x) < 50 &&
-                abs(accel_gyro_data.Gyro.Gyro_y) < 50 &&
+            if (abs(accel_gyro_data.Gyro.Gyro_x) < 50 && abs(accel_gyro_data.Gyro.Gyro_y) < 50 &&
                 abs(accel_gyro_data.Gyro.Gyro_z) < 50)
             {
-                if (still_cnt < 250) still_cnt++;
-                if (still_cnt >= 250) // 静止稳定约1s后开始累积平均
+                if (still_cnt < 250)
+                    still_cnt++;
+                if (still_cnt >= 250) // 连续 250 次满足静止阈值后开始累积平均（按 2ms 周期估算约 0.5s）
                 {
                     trim_sum_x += accel_gyro_data.Gyro.Gyro_x;
                     trim_sum_y += accel_gyro_data.Gyro.Gyro_y;
@@ -151,9 +157,8 @@ void flight_task(void *parameter)
                     trim_cnt++;
                     if (trim_cnt >= 100) // 100次×2ms≈0.2s平均一次
                     {
-                        my_mpu6050_gyro_trim((int16_t)(trim_sum_x / 100),
-                                             (int16_t)(trim_sum_y / 100),
-                                             (int16_t)(trim_sum_z / 100));
+                        my_mpu6050_gyro_trim(
+                            (int16_t)(trim_sum_x / 100), (int16_t)(trim_sum_y / 100), (int16_t)(trim_sum_z / 100));
                         trim_sum_x = trim_sum_y = trim_sum_z = 0;
                         trim_cnt = 0;
                     }
@@ -168,20 +173,19 @@ void flight_task(void *parameter)
         }
         remote_data remote_snapshot = remote_data_receive;
         // 仅在飞行状态且油门足够时才运行PID，防止地面振动导致积分饱和
-        if ((flight_state == NORMAL || flight_state == FIX_HEIGHT)
-            && remote_snapshot.thr >= 50)
+        if ((flight_state == NORMAL || flight_state == FIX_HEIGHT) && remote_snapshot.thr >= 50)
         {
             app_flight_pid_process();
         }
         //判断定高状态，进入定高PID
-        if(flight_state==FIX_HEIGHT)
+        if (flight_state == FIX_HEIGHT)
         {
-            static uint8_t count=0;
+            static uint8_t count = 0;
             count++;
-            if(count>=3)
+            if (count >= 3)
             {
                 app_fixed_height_pid_process();
-                count=0;
+                count = 0;
             }
         }
         //气压计周期采样：I2C1 总线由本任务(飞行任务)独占访问，MPU6050 与 SPL006
@@ -204,7 +208,7 @@ void flight_task(void *parameter)
 
 void led_task(void *parameter)
 {
-    uint8_t count=0;
+    uint8_t count = 0;
     TickType_t xLastWakeTime = xTaskGetTickCount();
     while (1)
     {
@@ -213,7 +217,8 @@ void led_task(void *parameter)
         if (remote_state == REMOTE_CONNECTED)
         {
             led_on(&led_1_1);
-        }else
+        }
+        else
         {
             led_off(&led_1_1);
         }
@@ -222,55 +227,58 @@ void led_task(void *parameter)
         {
             led_on(&led_1_2);
         }
-        else if(flight_state==NORMAL)
+        else if (flight_state == NORMAL)
         {
-            if(count%2==0)
-            {led_toggle(&led_1_2);}
-            
+            if (count % 2 == 0)
+            {
+                led_toggle(&led_1_2);
+            }
         }
-        else if(flight_state==FIX_HEIGHT)
+        else if (flight_state == FIX_HEIGHT)
         {
-            if(count%4==0)
-            {led_toggle(&led_1_2);}
-           
+            if (count % 4 == 0)
+            {
+                led_toggle(&led_1_2);
+            }
         }
-        else if(flight_state==FAIL)
+        else if (flight_state == FAIL)
         {
-            if(count%1==0)
-            {led_toggle(&led_1_2);}
-           
+            if (count % 1 == 0)
+            {
+                led_toggle(&led_1_2);
+            }
         }
-        else if(flight_state==SHUTDOWN)
+        else if (flight_state == SHUTDOWN)
         {
             led_off(&led_1_2);
         }
-         if(count==100)
-         {count=0;}
+        if (count == 100)
+        {
+            count = 0;
+        }
         vTaskDelayUntil(&xLastWakeTime, led_task_period);
     }
 }
 
-uint8_t rx_data[TX_PLOAD_WIDTH+1]={0};
+uint8_t rx_data[TX_PLOAD_WIDTH + 1] = {0};
 void flight_remote_control_task(void *parameter)
 {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     while (1)
-    {   // 接收遥控器数据并更新状态
-        uint8_t res=application_recevie_data(); 
+    { // 接收遥控器数据并更新状态
+        uint8_t res = application_recevie_data();
         // 处理连接状态，根据接收结果更新飞行状态
-        application_process_connect_state(res); 
+        application_process_connect_state(res);
         //处理关机命令
-        if(remote_data_receive.shutdown==1)
+        if (remote_data_receive.shutdown == 1)
         {
-           xTaskNotifyGive(power_task_handle);
+            xTaskNotifyGive(power_task_handle);
         }
-       
-        //遇到故障等待飞行任务处理完成
+
+        //处理飞行状态；FAIL 时复位 PID 并切回 IDLE
         application_process_flight_state();
-        
+
         //10ms接收一次遥控器数据，更新遥控器状态
         vTaskDelay(flight_remote_control_period);
     }
 }
-
-

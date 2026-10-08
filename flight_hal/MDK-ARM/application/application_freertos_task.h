@@ -12,22 +12,20 @@
 #include "application_flight.h"
 #include "spl006.h"
 
-
 #define FLIGHT_TASK_STACK_SIZE 128
-#define FLIGHT_TASK_PRIORITY 3
-#define flight_task_period 2   // 飞行任务周期2ms = 500Hz修正率
-
+#define FLIGHT_TASK_PRIORITY   3
+#define flight_task_period     2 // 飞行任务周期2ms = 500Hz修正率
 
 #define LED_TASK_STACK_SIZE 128
-#define LED_TASK_PRIORITY 1
-#define led_task_period 100
+#define LED_TASK_PRIORITY   1
+#define led_task_period     100
 
 #define flight_remote_control_TASK_STACK_SIZE 128
-#define flight_remote_control_PRIORITY 4
-#define flight_remote_control_period 10
+#define flight_remote_control_PRIORITY        4
+#define flight_remote_control_period          10
 
 #define power_task_STACK_SIZE 128
-#define power_task_PRIORITY 4
+#define power_task_PRIORITY   4
 
 //启动freertos任务系统
 void shutdown_task(void);

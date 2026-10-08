@@ -1,7 +1,6 @@
 #ifndef __APPLICATION_FLIGHT_H__
 #define __APPLICATION_FLIGHT_H__
 
-
 #include "my_mpu6050.h"
 #include "common_debug.h"
 #include "common_filter.h"
@@ -23,9 +22,9 @@
  *   5.5° → 积分生效后执行到位, 配平过头 → 向后飞
  *   4.75° → 仍向后飞(偏大)
  *   3.0° → 仍向后飞(偏大)
- *   1.5° → 当前值: 继续二分
+ *   1.5° → 历史试验值；当前值以 PITCH_TRIM_DEG 定义为准
  * ============================================================ */
-#define PITCH_TRIM_DEG  2.75f
+#define PITCH_TRIM_DEG 2.75f
 
 /* ============================================================
  * 横滚配平角(°)：与PITCH_TRIM_DEG同理，抵消桨盘面机械侧倾造成的持续横漂。
@@ -34,7 +33,7 @@
  *   -7.0° / -4.5° → 配平方案验证期用
  *   0.0° → 当前值: 配平已去除, 依赖内环积分自动补偿
  * ============================================================ */
-#define ROLL_TRIM_DEG  0.0f
+#define ROLL_TRIM_DEG 0.0f
 
 void app_flight_init(void);
 //根据陀螺仪数据计算欧拉角
@@ -56,5 +55,3 @@ extern motor_struct motor_left_down;
 extern Accel_Gyro_struct accel_gyro_data;
 
 #endif
-
-

@@ -16,7 +16,7 @@ extern int32_t spl006_compensated_pressure;
 //定高气压值
 extern int32_t fix_height_pressure;
 //发送的数据数组
-uint8_t flight[TX_PLOAD_WIDTH]={0};
+uint8_t flight[TX_PLOAD_WIDTH] = {0};
 // 欧拉角(在飞行任务中更新,此处只读用于回传显示)
 extern Euler_struct euler_angle;
 // 记录一开始进入MAX状态的时间
@@ -26,29 +26,34 @@ uint32_t start_min_time = 0;
 uint8_t retry_count = 0; // 定义一个变量来记录重试次数
 uint8_t application_recevie_data(void)
 {
-    memset(rx_buff, 0, TX_PLOAD_WIDTH);       // 清空缓冲区
-    uint8_t res=Int_nRF24L01P_RxPacket(rx_buff) ;
-   if(res==0)
-   {
-      // 修复：故障标志每次回包都按当前状态赋值，退出FAIL后必须回传0，
-      // 否则一旦进过FAIL，flight[0]永远为1，遥控端蜂鸣器会一直响
-      flight[0] = (flight_state == FAIL) ? 1 : 0;
-      // 回传MPU6050欧拉角(放大100倍取整，遥控端OLED显示)：
-      // flight[1..2]=pitch  flight[3..4]=roll  flight[5..6]=yaw (高字节在前)
-      {
-          int16_t p = (int16_t)(euler_angle.pitch * 100.0f);
-          int16_t r = (int16_t)(euler_angle.roll  * 100.0f);
-          int16_t y = (int16_t)(euler_angle.yaw   * 100.0f);
-          flight[1] = (p >> 8) & 0xFF; flight[2] = p & 0xFF;
-          flight[3] = (r >> 8) & 0xFF; flight[4] = r & 0xFF;
-          flight[5] = (y >> 8) & 0xFF; flight[6] = y & 0xFF;
-      }
-      uint16_t count=5; // 修复：回包重试上限从500改为5，防止阻塞接收任务数秒导致遥控被判失联
-      Int_nRF24L01P_TX_Mode(); // 切换发送模式
-      while(Int_nRF24L01P_TxPacket(flight)==1&&count--); // 发送数据，直到发送成功
-      {}
-     Int_nRF24L01P_RX_Mode(); // 切换回接收模式
-   }
+    memset(rx_buff, 0, TX_PLOAD_WIDTH); // 清空缓冲区
+    uint8_t res = Int_nRF24L01P_RxPacket(rx_buff);
+    if (res == 0)
+    {
+        // 修复：故障标志每次回包都按当前状态赋值，退出FAIL后必须回传0，
+        // 否则一旦进过FAIL，flight[0]永远为1，遥控端蜂鸣器会一直响
+        flight[0] = (flight_state == FAIL) ? 1 : 0;
+        // 回传MPU6050欧拉角(放大100倍取整，遥控端OLED显示)：
+        // flight[1..2]=pitch  flight[3..4]=roll  flight[5..6]=yaw (高字节在前)
+        {
+            int16_t p = (int16_t)(euler_angle.pitch * 100.0f);
+            int16_t r = (int16_t)(euler_angle.roll * 100.0f);
+            int16_t y = (int16_t)(euler_angle.yaw * 100.0f);
+            flight[1] = (p >> 8) & 0xFF;
+            flight[2] = p & 0xFF;
+            flight[3] = (r >> 8) & 0xFF;
+            flight[4] = r & 0xFF;
+            flight[5] = (y >> 8) & 0xFF;
+            flight[6] = y & 0xFF;
+        }
+        uint16_t count = 5;      // 修复：回包重试上限从500改为5，防止阻塞接收任务数秒导致遥控被判失联
+        Int_nRF24L01P_TX_Mode(); // 切换发送模式
+        while (Int_nRF24L01P_TxPacket(flight) == 1 && count--)
+            ; // 发送数据，失败时按 count 限制继续尝试
+        {
+        }
+        Int_nRF24L01P_RX_Mode(); // 切换回接收模式
+    }
     // 帧头校验
     if (rx_buff[0] != FRAME_HEADER1 || rx_buff[1] != FRAME_HEADER2 || rx_buff[2] != FRAME_HEADER3)
     {
@@ -62,7 +67,8 @@ uint8_t application_recevie_data(void)
         sum += rx_buff[i];
     }
     // 高位在前
-    sum_receive = rx_buff[TX_PLOAD_WIDTH - 4] << 24 | rx_buff[TX_PLOAD_WIDTH - 3] << 16 | rx_buff[TX_PLOAD_WIDTH - 2] << 8 | rx_buff[TX_PLOAD_WIDTH - 1];
+    sum_receive = rx_buff[TX_PLOAD_WIDTH - 4] << 24 | rx_buff[TX_PLOAD_WIDTH - 3] << 16 |
+                  rx_buff[TX_PLOAD_WIDTH - 2] << 8 | rx_buff[TX_PLOAD_WIDTH - 1];
 
     if (sum != sum_receive)
     {
@@ -84,7 +90,7 @@ uint8_t application_recevie_data(void)
 
 void application_process_connect_state(uint8_t res)
 {
-    // 如果返回值为0，表示接收成功，更新连接状态为已连接,此处使用的全局变量只有当前一个地方会修改，所以不需要使用互斥锁等机制来保护
+    // 返回 0 表示接收成功；本任务更新连接状态，其他任务读取该状态
     if (res == 0)
     {
         remote_state = REMOTE_CONNECTED;
@@ -96,7 +102,7 @@ void application_process_connect_state(uint8_t res)
         if (retry_count >= MAX_RETRY_COUNT) // 如果重试次数超过最大值，认为连接断开
         {
             remote_state = REMOTE_DISCONNECTED;
-            flight_state = FAIL; // 连接断开时将飞行状态设置为IDLE
+            flight_state = FAIL; // 连接断开时将飞行状态设置为 FAIL
             retry_count = 0;     // 重置重试次数
         }
     }
@@ -131,7 +137,7 @@ static uint8_t application_process_unlock(void)
                 thr_state = LEAVE_MAX;
             }
             else
-            { 
+            {
                 // 未超过1秒，回到FREE
                 thr_state = FREE;
             }
@@ -173,13 +179,12 @@ static uint8_t application_process_unlock(void)
     default:
         break;
     }
-       
+
     if (thr_state == UNLOCK)
     {
         return 0;
     }
     return 1;
-
 }
 
 void application_process_flight_state(void)
@@ -191,11 +196,10 @@ void application_process_flight_state(void)
         // 判断解锁状态
         if (application_process_unlock() == 0)
         {
-            app_flight_pid_reset();  // 清零PID积分，防止带入上次飞行的残留
+            app_flight_pid_reset(); // 清零PID积分，防止带入上次飞行的残留
             flight_state = NORMAL;
             //解锁成功后需要重置状态
             thr_state = FREE;
-
         }
         break;
     case NORMAL:
@@ -206,7 +210,8 @@ void application_process_flight_state(void)
             remote_data_receive.fix_height = 0;
 
             //记录进入定高状态时的气压值
-            fix_height_pressure = spl_process_pressure(spl006_pressure, spl006_temperature, &spl006_compensated_pressure);
+            fix_height_pressure =
+                spl_process_pressure(spl006_pressure, spl006_temperature, &spl006_compensated_pressure);
         }
         else if (remote_state == REMOTE_DISCONNECTED) // 判断故障状态
         {

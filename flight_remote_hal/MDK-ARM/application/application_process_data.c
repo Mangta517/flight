@@ -1,27 +1,27 @@
 #include "application_process_data.h"
 
-Joystick_struct joystick_value={0}; // 声明外部变量
-remote_data remote_data_value={0}; // 声明外部变量
+Joystick_struct joystick_value = {0}; // 定义全局摇杆数据
+remote_data remote_data_value = {0};  // 定义全局遥控数据
 
 extern SemaphoreHandle_t joystick_mutex; // 摇杆数据互斥锁
 //区分摇杆值和按键微调值
-int16_t key_pit_offset=0; // 按键微调值
-int16_t key_rol_offset=0; // 按键微调值
+int16_t key_pit_offset = 0; // 按键微调值
+int16_t key_rol_offset = 0; // 按键微调值
 
 //摇杆偏移量
-int16_t thr_offset=0; // 油门偏移量
-int16_t yaw_offset=0; // 航向偏移量
-int16_t pit_offset=0; // 俯仰偏移量
-int16_t rol_offset=0; // 横滚偏移量
+int16_t thr_offset = 0; // 油门偏移量
+int16_t yaw_offset = 0; // 航向偏移量
+int16_t pit_offset = 0; // 俯仰偏移量
+int16_t rol_offset = 0; // 横滚偏移量
 
 //校准摇杆函数
 //calib_thr: 1=同时校准油门零点(手动校准,要求油门推到底); 0=不校准油门(自动校准)
 void calibrate_joystick(uint8_t calib_thr)
 {
     //在进行摇杆校准时把按键微调值清零
-    xSemaphoreTake(joystick_mutex, portMAX_DELAY); 
-    key_pit_offset=0;
-    key_rol_offset=0;
+    xSemaphoreTake(joystick_mutex, portMAX_DELAY);
+    key_pit_offset = 0;
+    key_rol_offset = 0;
     xSemaphoreGive(joystick_mutex);
     int16_t thr_sum = 0, yaw_sum = 0, pit_sum = 0, rol_sum = 0;
     for (int i = 0; i < 10; i++)
@@ -47,15 +47,14 @@ void calibrate_joystick(uint8_t calib_thr)
     pit_offset += pit_sum / 10;
     rol_offset += rol_sum / 10;
     xSemaphoreGive(joystick_mutex);
-
 }
 
 void process_key_data(void)
 {
     //使用互斥锁保护按键数据和摇杆数据的访问，防止数据冲突
     key_type key = key_get();
-    if(key==KEY_RIGHT_TOP_LONG)
-    {//校准摇杆(手动校准: 校准油门,要求油门推到底)
+    if (key == KEY_RIGHT_TOP_LONG)
+    { //校准摇杆(手动校准: 校准油门,要求油门推到底)
         calibrate_joystick(1);
         return;
     }
@@ -75,11 +74,13 @@ void process_key_data(void)
     else if (key == KEY_RIGHT)
     { // 向右飞微调，横滚角＋
         key_rol_offset += 10;
-    }else if(key==KEY_RIGHT_TOP)
-    { // 定高开关
+    }
+    else if (key == KEY_RIGHT_TOP)
+    {                                   // 定高开关
         remote_data_value.fix_high = 1; // 切换定高开关状态
-    }else if(key==KEY_LEFT_TOP)
-    {//关机按键，按下一次只发送一次切换命令
+    }
+    else if (key == KEY_LEFT_TOP)
+    { //关机按键，按下一次只发送一次切换命令
         remote_data_value.shutdown = 1;
     }
     xSemaphoreGive(joystick_mutex); // 释放互斥锁
@@ -87,7 +88,7 @@ void process_key_data(void)
 
 void process_joystick_data(void)
 {
-    //同一个全局变量，摇杆和按键都使用这个变量，为了防止故障需要进入临界区
+    // 摇杆和按键共享数据及偏移量，使用同一把 joystick_mutex 保护更新
     //taskENTER_CRITICAL();
     xSemaphoreTake(joystick_mutex, portMAX_DELAY); // 获取互斥锁，等待直到可用
     Joystick_GetValue(&joystick_value);

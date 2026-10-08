@@ -7,9 +7,9 @@ static TaskHandle_t oled_handle;
 static TaskHandle_t flight_fail_handle;
 SemaphoreHandle_t joystick_mutex; // 摇杆数据互斥锁
 //启动freertos任务系统
-extern uint8_t post_buff[TX_PLOAD_WIDTH];        // 32 bytes payload width for post-processing
-extern uint8_t remote_connected;        // 遥控器与飞控连接状态
-extern Joystick_struct joystick_value;  // 摇杆数据(用于自动校准回中判断)
+extern uint8_t post_buff[TX_PLOAD_WIDTH]; // TX_PLOAD_WIDTH bytes payload width for post-processing
+extern uint8_t remote_connected;          // 遥控器与飞控连接状态
+extern Joystick_struct joystick_value;    // 摇杆数据(用于自动校准回中判断)
 //遥控任务
 void remote_control_task(void *parameter);
 //按键任务
@@ -17,41 +17,52 @@ void key_get_task(void *parameter);
 //摇杆任务
 void joystick_task(void *parameter);
 //OLED显示任务
-void oled_task(void *parameter);  
+void oled_task(void *parameter);
 //飞行异常状态任务
 void flight_fail_task(void *parameter);
 
 void application_freertos_start(void)
 {
-// 在启动调度器前先创建互斥锁，避免任务先运行时句柄仍为空
-joystick_mutex = xSemaphoreCreateMutex();
-if (joystick_mutex == NULL)
-{
-    Error_Handler();
-}
+    // 在启动调度器前先创建互斥锁，避免任务先运行时句柄仍为空
+    joystick_mutex = xSemaphoreCreateMutex();
+    if (joystick_mutex == NULL)
+    {
+        Error_Handler();
+    }
 
-//1.创建通讯任务
-xTaskCreate(remote_control_task, "remote_control_task", remote_control_TASK_STACK_SIZE, NULL, remote_control_PRIORITY, &remote_control_handle);
-//2.创建按键任务
-xTaskCreate(key_get_task, "key_get_task", key_get_TASK_STACK_SIZE, NULL, key_get_task_PRIORITY, &key_get_handle);
-//3.创建摇杆任务
-xTaskCreate(joystick_task, "joystick_task", joystick_TASK_STACK_SIZE, NULL, joystick_task_PRIORITY, &joystick_handle);
-//4.创建OLED显示任务
-xTaskCreate(oled_task, "oled_task", oled_TASK_STACK_SIZE, NULL, oled_task_PRIORITY, &oled_handle);
-//5.创建飞行异常状态任务
-xTaskCreate(flight_fail_task, "flight_fail_task", flight_fail_TASK_STACK_SIZE, NULL, flight_fail_task_PRIORITY, &flight_fail_handle);
-//启动调度器
-vTaskStartScheduler();
+    //1.创建通讯任务
+    xTaskCreate(remote_control_task,
+                "remote_control_task",
+                remote_control_TASK_STACK_SIZE,
+                NULL,
+                remote_control_PRIORITY,
+                &remote_control_handle);
+    //2.创建按键任务
+    xTaskCreate(key_get_task, "key_get_task", key_get_TASK_STACK_SIZE, NULL, key_get_task_PRIORITY, &key_get_handle);
+    //3.创建摇杆任务
+    xTaskCreate(
+        joystick_task, "joystick_task", joystick_TASK_STACK_SIZE, NULL, joystick_task_PRIORITY, &joystick_handle);
+    //4.创建OLED显示任务
+    xTaskCreate(oled_task, "oled_task", oled_TASK_STACK_SIZE, NULL, oled_task_PRIORITY, &oled_handle);
+    //5.创建飞行异常状态任务
+    xTaskCreate(flight_fail_task,
+                "flight_fail_task",
+                flight_fail_TASK_STACK_SIZE,
+                NULL,
+                flight_fail_task_PRIORITY,
+                &flight_fail_handle);
+    //启动调度器
+    vTaskStartScheduler();
 }
-uint8_t remote_data_buf[TX_PLOAD_WIDTH] = {0};        // 32 bytes payload width for TX
+uint8_t remote_data_buf[TX_PLOAD_WIDTH] = {0}; // TX_PLOAD_WIDTH bytes payload width for TX
 
 void key_get_task(void *parameter)
 {
     TickType_t xLastWakeTime = xTaskGetTickCount();
 
-    while(1)
+    while (1)
     {
-       process_key_data();
+        process_key_data();
         //20ms执行一次按键任务
         vTaskDelayUntil(&xLastWakeTime, key_get_task_period);
     }
@@ -59,14 +70,14 @@ void key_get_task(void *parameter)
 
 void remote_control_task(void *parameter)
 {
-  while(1)
-  {
-    //将打包完成的遥控数据发送出去
-    application_transmit_data();
-    //固定间隔发送：任务单次执行时间可能超过周期(等待飞控回复)，若用 vTaskDelayUntil
-    //会连续空转刷爆射频导致链路不稳，这里改用 vTaskDelay 保证每次发送之间至少间隔一个周期
-    vTaskDelay(remote_task_period);
-  }
+    while (1)
+    {
+        //将打包完成的遥控数据发送出去
+        application_transmit_data();
+        //固定间隔发送：任务单次执行时间可能超过周期(等待飞控回复)，若用 vTaskDelayUntil
+        //会连续空转刷爆射频导致链路不稳，这里改用 vTaskDelay 保证每次发送之间至少间隔一个周期
+        vTaskDelay(remote_task_period);
+    }
 }
 
 void joystick_task(void *parameter)
@@ -81,8 +92,8 @@ void joystick_task(void *parameter)
     uint8_t last_connected = 0;
     uint8_t calib_pending = 0;
     uint16_t calib_wait_ms = 0;
-    while(1)
-    {// 获取摇杆的ADC值
+    while (1)
+    { // 获取摇杆的ADC值
         process_joystick_data();
         // 检测连接上升沿(断开->连接)
         if (remote_connected && !last_connected)
@@ -95,9 +106,8 @@ void joystick_task(void *parameter)
         if (calib_pending)
         {
             calib_wait_ms += joystick_task_period;
-            if (joystick_value.yaw  > 350 && joystick_value.yaw  < 650 &&
-                joystick_value.pit  > 350 && joystick_value.pit  < 650 &&
-                joystick_value.rol  > 350 && joystick_value.rol  < 650)
+            if (joystick_value.yaw > 350 && joystick_value.yaw < 650 && joystick_value.pit > 350 &&
+                joystick_value.pit < 650 && joystick_value.rol > 350 && joystick_value.rol < 650)
             {
                 calibrate_joystick(0); // 自动校准: 不校准油门
                 calib_pending = 0;
@@ -117,13 +127,13 @@ void oled_task(void *parameter)
 {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     // 初始化OLED显示
-   app_OLED_Init();
-  while(1)
-     {
+    app_OLED_Init();
+    while (1)
+    {
         // 在OLED上显示遥控数据
         app_OLED_Show();
         vTaskDelayUntil(&xLastWakeTime, oled_task_period);
-     }
+    }
 }
 
 void flight_fail_task(void *parameter)
@@ -135,7 +145,8 @@ void flight_fail_task(void *parameter)
         if (remote_connected && post_buff[0] == 1)
         {
             buzz_on();
-        }else
+        }
+        else
         {
             buzz_off();
         }

@@ -23,7 +23,6 @@ void my_mpu6050_read_reg(uint8_t reg, uint8_t *data)
     HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR_READ, reg, I2C_MEMADD_SIZE_8BIT, data, 1, 100);
 }
 
-
 //在初始化之后进行零偏校准
 void my_mpu6050_zero_offset(void)
 {
@@ -42,8 +41,10 @@ void my_mpu6050_zero_offset(void)
     {
         my_mpu6050_get_accel(&current_accel);
         //如果误差判断的值过小，则无法进行零偏校准
-        if (abs(current_accel.Accel_x - last_accel.Accel_x) < 300 && abs(current_accel.Accel_y - last_accel.Accel_y) < 300 && abs(current_accel.Accel_z - last_accel.Accel_z) < 300
-            && abs(current_accel.Accel_x) < 200 && abs(current_accel.Accel_y) < 200 && abs(current_accel.Accel_z - 16384) < 200)
+        if (abs(current_accel.Accel_x - last_accel.Accel_x) < 300 &&
+            abs(current_accel.Accel_y - last_accel.Accel_y) < 300 &&
+            abs(current_accel.Accel_z - last_accel.Accel_z) < 300 && abs(current_accel.Accel_x) < 200 &&
+            abs(current_accel.Accel_y) < 200 && abs(current_accel.Accel_z - 16384) < 200)
         {
             count++;
         }
@@ -105,7 +106,7 @@ void my_mpu6050_init(void)
     // 重置MPU6050通过对电源管理寄存器1的RESET置1
     my_mpu6050_write_reg(MPU6050_REG_PWR_MGMT_1, 0x80);
     // 重置后电源管理寄存器的值为0x40,表示进入低功耗模式
-    uint8_t data=0;
+    uint8_t data = 0;
     while (data != 0x40)
     {
         my_mpu6050_read_reg(MPU6050_REG_PWR_MGMT_1, &data);
@@ -113,7 +114,7 @@ void my_mpu6050_init(void)
     //唤醒MPU6050
     my_mpu6050_write_reg(MPU6050_REG_PWR_MGMT_1, 0x00);
     //选择合适的量程
-     //配置陀螺仪角速度为+—2000°/s
+    //配置陀螺仪角速度为+—2000°/s
     my_mpu6050_write_reg(0x1B, 0x18);
     //配置加速度计量程为+—2g
     my_mpu6050_write_reg(0x1C, 0x00);
@@ -138,8 +139,7 @@ void my_mpu6050_get_gyro(Gyro_struct *gyro_data)
 {
     uint8_t buf[6];
     // 一次突发读6字节(0x43~0x48)，替代6次单字节读，大幅缩短总线占用
-    if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR_READ, MPU6050_GYRO_XOUT_H,
-                         I2C_MEMADD_SIZE_8BIT, buf, 6, 100) != HAL_OK)
+    if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR_READ, MPU6050_GYRO_XOUT_H, I2C_MEMADD_SIZE_8BIT, buf, 6, 100) != HAL_OK)
     {
         return;
     }
@@ -152,8 +152,7 @@ void my_mpu6050_get_accel(Accel_struct *accel_data)
 {
     uint8_t buf[6];
     // 一次突发读6字节(0x3B~0x40)
-    if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR_READ, MPU6050_ACCEL_XOUT_H,
-                         I2C_MEMADD_SIZE_8BIT, buf, 6, 100) != HAL_OK)
+    if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR_READ, MPU6050_ACCEL_XOUT_H, I2C_MEMADD_SIZE_8BIT, buf, 6, 100) != HAL_OK)
     {
         return;
     }
@@ -166,8 +165,7 @@ void my_mpu6050_get_data(Accel_Gyro_struct *data)
 {
     uint8_t buf[14];
     // 一次突发读14字节(0x3B~0x48): 加速度6 + 温度2 + 陀螺仪6
-    if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR_READ, MPU6050_ACCEL_XOUT_H,
-                         I2C_MEMADD_SIZE_8BIT, buf, 14, 100) != HAL_OK)
+    if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR_READ, MPU6050_ACCEL_XOUT_H, I2C_MEMADD_SIZE_8BIT, buf, 14, 100) != HAL_OK)
     {
         return;
     }
@@ -178,4 +176,3 @@ void my_mpu6050_get_data(Accel_Gyro_struct *data)
     data->Gyro.Gyro_y = ((buf[10] << 8) | buf[11]) - offset_gyro_y;
     data->Gyro.Gyro_z = ((buf[12] << 8) | buf[13]) - offset_gyro_z;
 }
-

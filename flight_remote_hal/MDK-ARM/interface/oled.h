@@ -10,17 +10,17 @@
  */
 
 /* I2C 从机地址 */
-#define OLED_I2C_ADDR  0x78   // 0x3C << 1 | 写位
+#define OLED_I2C_ADDR 0x78 // 0x3C << 1 | 写位
 
 /* 控制字节 */
-#define OLED_CTRL_CMD   0x00  // 命令控制字节
-#define OLED_CTRL_DATA  0x40  // 数据控制字节
+#define OLED_CTRL_CMD  0x00 // 命令控制字节
+#define OLED_CTRL_DATA 0x40 // 数据控制字节
 
-#define OLED_CMD   0
-#define OLED_DATA  1
+#define OLED_CMD  0
+#define OLED_DATA 1
 
 /* 中文字库参数：每个半字 12 字节 */
-#define OLED_CH_BYTES_PER_HALF  12
+#define OLED_CH_BYTES_PER_HALF 12
 
 /* OLED 控制函数 */
 void OLED_WR_Byte(uint8_t data, uint8_t cmd);

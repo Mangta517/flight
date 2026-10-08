@@ -13,10 +13,10 @@
 #define __FILE___NAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 //#define __FILE___NAME (strrchr(__FILE_NAME_, '\') ? strrchr(__FILE__, '\') + 1 : __FILE__)
 //使用宏定义，在打印日志之前先打印文件名和行号
-#define debug_printf(format,...) printf("[%s:%d]"format,__FILE__,__LINE__,##__VA_ARGS__)
+#define debug_printf(format, ...) printf("[%s:%d]" format, __FILE__, __LINE__, ##__VA_ARGS__)
 #else
 
-#define debug_printf(format,...)
+#define debug_printf(format, ...)
 
 #endif
 #endif // COMMON_DEBUG_H

@@ -1,14 +1,13 @@
 #include "timer_motor.h"
 
-
 //修改电机速度
 void timer_motor_speed(motor_struct *motor)
 {
-    if(motor->speed > 1000)
+    if (motor->speed > 1000)
     {
         motor->speed = 1000;
     }
-    else if(motor->speed < 0)
+    else if (motor->speed < 0)
     {
         motor->speed = 0;
     }

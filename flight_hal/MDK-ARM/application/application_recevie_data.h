@@ -14,7 +14,7 @@
 //最大重试次数
 // 原值5(≈50ms)对遥控器"发→等回复(20ms)→再发"的节奏过紧, 推油门时易误判失联闪故障灯。
 // 放宽到8(≈80ms), 留足余量; 仍能在数秒内可靠识别真正失联。
-#define  MAX_RETRY_COUNT 8
+#define REMOTE_TIMEOUT_MS 80
 //
 
 typedef struct
@@ -30,12 +30,16 @@ typedef struct
 extern Remote_State remote_state;
 extern Flight_State flight_state;
 extern volatile remote_data remote_data_receive;
-//接收遥控器发送的数据，再解析为结构体,如果返回0，表示接收成功，返回1表示接收失败
+/* ��������ֻ��������֡�����������ڶ��ٽ���ȡ��һ���������ڵĿ��ա� */
+typedef struct
+{
+    remote_data control;
+    TickType_t last_valid_tick;
+    uint8_t seen;
+} remote_snapshot_struct;
+
 uint8_t application_recevie_data(void);
-//处理连接状态,res是上一次连接状态的返回值
-void application_process_connect_state(uint8_t res); // 处理接收到的遥控器数据，根据遥控器状态更新连接状态
-uint8_t application_process_unlock(void);//处理解锁状态
-void application_process_flight_state(void);//处理飞行状态
+void application_remote_snapshot(remote_snapshot_struct *snapshot);
+void application_process_connect_state(const remote_snapshot_struct *snapshot);
+void application_process_flight_state(const remote_snapshot_struct *snapshot, uint8_t can_arm);
 #endif
-
-

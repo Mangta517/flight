@@ -4,6 +4,11 @@ Gyro_struct last_gyro={0};
 Euler_struct euler_angle = {0};
 Accel_Gyro_struct accel_gyro_data = {0};
 
+static uint8_t imu_ready;
+static uint8_t imu_calibrated;
+static TickType_t fail_last_tick;
+static uint32_t fail_credit;
+static Flight_State motor_last_state = IDLE;
 float yaw_sum;
 extern KalmanFilter_Struct kfs[3];
 extern volatile remote_data remote_data_receive;
@@ -79,7 +84,6 @@ static float app_stick_to_angle(int16_t raw)
     return cmd / 16.0f;
 }
 
-extern TaskHandle_t flight_remote_control_handle;
 
 static int16_t app_flight_limit_motor_speed(float speed)
 {
@@ -97,107 +101,131 @@ static int16_t app_flight_limit_motor_speed(float speed)
 
 //俯仰角PID(外环角度环: PD, 积分不用在角度环避免振荡)
 pid_struct pitch_pid={.kp=2.5,.ki=0,.kd=0.3,.integral_limit=5000,
-                      .d_lpf_coef=0.5f,.output_limit=120.0f};
+    .d_lpf_coef=0.5f,.output_limit=120.0f};
 //Y轴角速度，对应俯仰角内环PID(角速度环: PID, 积分消除恒定干扰)
 pid_struct gyro_y_pid={.kp=1.5,.ki=0.5,.kd=0.18,.integral_limit=500,
-                       .d_lpf_coef=0.5f,.output_limit=500.0f};
+    .d_lpf_coef=0.5f,.output_limit=500.0f};
 //横滚角PID
 pid_struct roll_pid={.kp=2.5,.ki=0,.kd=0.3,.integral_limit=5000,
-                     .d_lpf_coef=0.5f,.output_limit=120.0f};
+    .d_lpf_coef=0.5f,.output_limit=120.0f};
 //X轴角速度，对应横滚角内环PID
 pid_struct gyro_x_pid={.kp=1.5,.ki=0.5,.kd=0.18,.integral_limit=500,
-                       .d_lpf_coef=0.5f,.output_limit=500.0f};
+    .d_lpf_coef=0.5f,.output_limit=500.0f};
 //偏航角PID
 pid_struct yaw_pid={.kp=0.5,.ki=0,.kd=0.5,.integral_limit=5000,
-                    .d_lpf_coef=0.5f,.output_limit=120.0f};
+    .d_lpf_coef=0.5f,.output_limit=120.0f};
 //Z轴角速度，对应偏航角内环PID
 pid_struct gyro_z_pid={.kp=0.5,.ki=0.5,.kd=0,.integral_limit=500,
-                       .d_lpf_coef=0.5f,.output_limit=500.0f};
+    .d_lpf_coef=0.5f,.output_limit=500.0f};
 
 //定高PID
 pid_struct height_pid={.kp=0.3,.ki=0,.kd=0.5,.integral_limit=5000};
 
-void app_flight_init()
+uint8_t app_flight_init(void)
 {
     //mpu6050初始化
-my_mpu6050_init();
-//电机初始化
-motor_start(&motor_left_top);
-motor_start(&motor_right_top);
-motor_start(&motor_right_down);
-motor_start(&motor_left_down);
+    imu_ready = (my_mpu6050_init() == 0);
+    imu_calibrated = 0;
+    //电机初始化
+    motor_start(&motor_left_top);
+    motor_start(&motor_right_top);
+    motor_start(&motor_right_down);
+    motor_start(&motor_left_down);
+    return !imu_ready;
 }
 
 
-void app_flight_get_euler_angle()
+uint8_t app_flight_get_euler_angle(void)
 {
-//通过MPU6050获取数据
-my_mpu6050_get_data(&accel_gyro_data);
+    //通过MPU6050获取数据
+    if (my_mpu6050_get_data(&accel_gyro_data) != 0)
+    {
+        return 1;
+    }
 
 
 
-//对角速度进行低通滤波，会对后续的数据实时性有影响
-//对准确性要求没那么高，但计算一定要迅速
-//output=加权系数*last_output+(1-加权系数)*当前测量值
-accel_gyro_data.Gyro.Gyro_x=Common_Filter_LowPass(accel_gyro_data.Gyro.Gyro_x,last_gyro.Gyro_x);
-accel_gyro_data.Gyro.Gyro_y=Common_Filter_LowPass(accel_gyro_data.Gyro.Gyro_y,last_gyro.Gyro_y);
-accel_gyro_data.Gyro.Gyro_z=Common_Filter_LowPass(accel_gyro_data.Gyro.Gyro_z,last_gyro.Gyro_z);
-last_gyro.Gyro_x=accel_gyro_data.Gyro.Gyro_x;
-last_gyro.Gyro_y=accel_gyro_data.Gyro.Gyro_y;
-last_gyro.Gyro_z=accel_gyro_data.Gyro.Gyro_z;
+    //对角速度进行低通滤波，会对后续的数据实时性有影响
+    //对准确性要求没那么高，但计算一定要迅速
+    //output=加权系数*last_output+(1-加权系数)*当前测量值
+    accel_gyro_data.Gyro.Gyro_x=Common_Filter_LowPass(accel_gyro_data.Gyro.Gyro_x,last_gyro.Gyro_x);
+    accel_gyro_data.Gyro.Gyro_y=Common_Filter_LowPass(accel_gyro_data.Gyro.Gyro_y,last_gyro.Gyro_y);
+    accel_gyro_data.Gyro.Gyro_z=Common_Filter_LowPass(accel_gyro_data.Gyro.Gyro_z,last_gyro.Gyro_z);
+    last_gyro.Gyro_x=accel_gyro_data.Gyro.Gyro_x;
+    last_gyro.Gyro_y=accel_gyro_data.Gyro.Gyro_y;
+    last_gyro.Gyro_z=accel_gyro_data.Gyro.Gyro_z;
 
-//卡尔曼滤波
-accel_gyro_data.Accel.Accel_x=Common_Filter_KalmanFilter(&kfs[0],accel_gyro_data.Accel.Accel_x);
-accel_gyro_data.Accel.Accel_y=Common_Filter_KalmanFilter(&kfs[1],accel_gyro_data.Accel.Accel_y);
-accel_gyro_data.Accel.Accel_z=Common_Filter_KalmanFilter(&kfs[2],accel_gyro_data.Accel.Accel_z);
+    //卡尔曼滤波
+    accel_gyro_data.Accel.Accel_x=Common_Filter_KalmanFilter(&kfs[0],accel_gyro_data.Accel.Accel_x);
+    accel_gyro_data.Accel.Accel_y=Common_Filter_KalmanFilter(&kfs[1],accel_gyro_data.Accel.Accel_y);
+    accel_gyro_data.Accel.Accel_z=Common_Filter_KalmanFilter(&kfs[2],accel_gyro_data.Accel.Accel_z);
 
 
-//打印角速度
-//debug_printf(":%d,%d,%d\n", accel_gyro_data.Gyro.Gyro_x, accel_gyro_data.Gyro.Gyro_y, accel_gyro_data.Gyro.Gyro_z);
-//打印加速度
-//对毛刺比较明显的数据进行卡尔曼滤波
-//debug_printf(":%d,%d,%d\n",accel_gyro_data.Accel.Accel_x,accel_gyro_data.Accel.Accel_y,accel_gyro_data.Accel.Accel_z);
+    //打印角速度
+    //debug_printf(":%d,%d,%d\n", accel_gyro_data.Gyro.Gyro_x, accel_gyro_data.Gyro.Gyro_y, accel_gyro_data.Gyro.Gyro_z);
+    //打印加速度
+    //对毛刺比较明显的数据进行卡尔曼滤波
+    //debug_printf(":%d,%d,%d\n",accel_gyro_data.Accel.Accel_x,accel_gyro_data.Accel.Accel_y,accel_gyro_data.Accel.Accel_z);
 
-//使用互补解算来计算欧拉角==》优先使用加速度解算==》俯仰角和横滚角可以使用
-//偏航角只能通过角速度积分
+    //使用互补解算来计算欧拉角==》优先使用加速度解算==》俯仰角和横滚角可以使用
+    //偏航角只能通过角速度积分
 
-/* euler_angle.pitch=atan2(accel_gyro_data.Accel.Accel_x,accel_gyro_data.Accel.Accel_z)/3.14159*180;
-euler_angle.roll=atan2(accel_gyro_data.Accel.Accel_y,accel_gyro_data.Accel.Accel_z)/3.14159*180;
+    /* euler_angle.pitch=atan2(accel_gyro_data.Accel.Accel_x,accel_gyro_data.Accel.Accel_z)/3.14159*180;
+    euler_angle.roll=atan2(accel_gyro_data.Accel.Accel_y,accel_gyro_data.Accel.Accel_z)/3.14159*180;
 
-//偏航角使用角速度积分
-//16位ADC65535转化为角度，量程为+-2000°
-yaw_sum+=(accel_gyro_data.Gyro.Gyro_z*2000.0/32767.0)*0.002;
-euler_angle.yaw=yaw_sum;
- */
-//使用移植的四元数解算
-// 用实测控制周期替代硬编码0.002: I2C读取+气压计+遥控抢占会导致实际周期波动,
-// 固定dt会让四元数积分漂移, 姿态估计与实际姿态偏差 → 飞控"以为飞机歪了"乱修正
-{
-    static TickType_t s_last_imu_tick = 0;
-    TickType_t now = xTaskGetTickCount();
-    float imu_dt = (s_last_imu_tick == 0) ? PID_Period
-                                          : ((float)(now - s_last_imu_tick)) / 1000.0f;
-    s_last_imu_tick = now;
-    if (imu_dt < 0.0005f) imu_dt = 0.0005f;   // 下限0.5ms, 防除零/跳变
-    if (imu_dt > 0.02f)   imu_dt = 0.02f;     // 上限20ms, 防长时间卡死
-    Common_IMU_GetEulerAngle(&accel_gyro_data,&euler_angle,imu_dt);
+    //偏航角使用角速度积分
+    //16位ADC65535转化为角度，量程为+-2000°
+    yaw_sum+=(accel_gyro_data.Gyro.Gyro_z*2000.0/32767.0)*0.002;
+    euler_angle.yaw=yaw_sum;
+    */
+    //使用移植的四元数解算
+    // 用实测控制周期替代硬编码0.002: I2C读取+气压计+遥控抢占会导致实际周期波动,
+    // 固定dt会让四元数积分漂移, 姿态估计与实际姿态偏差 → 飞控"以为飞机歪了"乱修正
+    {
+        static TickType_t s_last_imu_tick = 0;
+        TickType_t now = xTaskGetTickCount();
+        float imu_dt = PID_Period;
+        if (s_last_imu_tick != 0)
+        {
+            imu_dt = (float)(now - s_last_imu_tick) / configTICK_RATE_HZ;
+        }
+        s_last_imu_tick = now;
+        if (imu_dt < 0.0005f)
+        {
+            imu_dt = 0.0005f;
+        }   // 下限0.5ms, 防除零/跳变
+        if (imu_dt > 0.02f)
+        {
+            imu_dt = 0.02f;
+        }     // 上限20ms, 防长时间卡死
+        Common_IMU_GetEulerAngle(&accel_gyro_data,&euler_angle,imu_dt);
+    }
+
+    //debug_printf(":%.2f,%.2f,%.2f\n",euler_angle.pitch,euler_angle.roll,euler_angle.yaw);
+    return 0;
 }
 
-//debug_printf(":%.2f,%.2f,%.2f\n",euler_angle.pitch,euler_angle.roll,euler_angle.yaw);
-}
 
-
-void app_flight_pid_process()
+void app_flight_pid_process(const remote_data *control)
 {
     // 测量实际控制周期，替代硬编码 PID_Period(0.002)，
     // 消除 I2C/浮点耗时不固定导致的 D/I 项缩放偏差
     static TickType_t s_last_ctrl_tick = 0;
     TickType_t now = xTaskGetTickCount();
-    float ctrl_dt = (s_last_ctrl_tick == 0) ? PID_Period
-                                           : ((float)(now - s_last_ctrl_tick)) / 1000.0f;
+    float ctrl_dt = PID_Period;
+    if (s_last_ctrl_tick != 0)
+    {
+        ctrl_dt = (float)(now - s_last_ctrl_tick) / configTICK_RATE_HZ;
+    }
     s_last_ctrl_tick = now;
-    if (ctrl_dt < 0.001f) ctrl_dt = 0.001f;
-    if (ctrl_dt > 0.05f)  ctrl_dt = 0.05f;
+    if (ctrl_dt < 0.001f)
+    {
+        ctrl_dt = 0.001f;
+    }
+    if (ctrl_dt > 0.05f)
+    {
+        ctrl_dt = 0.05f;
+    }
 
     pitch_pid.dt = ctrl_dt;
     roll_pid.dt  = ctrl_dt;
@@ -206,54 +234,54 @@ void app_flight_pid_process()
     gyro_x_pid.dt = ctrl_dt;
     gyro_z_pid.dt = ctrl_dt;
 
-remote_data remote_snapshot = remote_data_receive;
-//俯仰角，需要给目标值和测量值赋值=》如果平稳飞行则外环角度位0，如果遥控则角度等于摇杆的值
-//需要把摇杆1000的值进行转换（带死区，消除中位偏移导致的持续漂移）
-//叠加 PITCH_TRIM_DEG 俯仰配平角，抵消桨盘面机械前倾造成的持续前漂
-pitch_pid.desire=app_stick_to_angle(remote_snapshot.pit) + PITCH_TRIM_DEG;
-//外环的测量值为当前的俯仰角
-pitch_pid.measure=euler_angle.pitch;
-//内环的测量值为当前的俯仰角角速度
-gyro_y_pid.measure=(accel_gyro_data.Gyro.Gyro_y*2000.0/32767.0);
-//进行串级PID计算
-com_pid_calc_chain(&pitch_pid,&gyro_y_pid);
+    remote_data remote_snapshot = *control;
+    //俯仰角，需要给目标值和测量值赋值=》如果平稳飞行则外环角度位0，如果遥控则角度等于摇杆的值
+    //需要把摇杆1000的值进行转换（带死区，消除中位偏移导致的持续漂移）
+    //叠加 PITCH_TRIM_DEG 俯仰配平角，抵消桨盘面机械前倾造成的持续前漂
+    pitch_pid.desire=app_stick_to_angle(remote_snapshot.pit) + PITCH_TRIM_DEG;
+    //外环的测量值为当前的俯仰角
+    pitch_pid.measure=euler_angle.pitch;
+    //内环的测量值为当前的俯仰角角速度
+    gyro_y_pid.measure=(accel_gyro_data.Gyro.Gyro_y*2000.0/32767.0);
+    //进行串级PID计算
+    com_pid_calc_chain(&pitch_pid,&gyro_y_pid);
 
-//横滚角的PID计算
-//需要把摇杆1000的值进行转换,横滚角目标值（带死区）
-//叠加 ROLL_TRIM_DEG 横滚配平角，抵消桨盘面机械侧倾造成的持续横漂
-roll_pid.desire=app_stick_to_angle(remote_snapshot.roll) + ROLL_TRIM_DEG;
-//外环的测量值为当前的横滚角
-roll_pid.measure=euler_angle.roll;
-//内环的测量值为当前的横滚角角速度
-gyro_x_pid.measure=(accel_gyro_data.Gyro.Gyro_x*2000.0/32767.0);
-//进行串级PID计算
-com_pid_calc_chain(&roll_pid,&gyro_x_pid);
+    //横滚角的PID计算
+    //需要把摇杆1000的值进行转换,横滚角目标值（带死区）
+    //叠加 ROLL_TRIM_DEG 横滚配平角，抵消桨盘面机械侧倾造成的持续横漂
+    roll_pid.desire=app_stick_to_angle(remote_snapshot.roll) + ROLL_TRIM_DEG;
+    //外环的测量值为当前的横滚角
+    roll_pid.measure=euler_angle.roll;
+    //内环的测量值为当前的横滚角角速度
+    gyro_x_pid.measure=(accel_gyro_data.Gyro.Gyro_x*2000.0/32767.0);
+    //进行串级PID计算
+    com_pid_calc_chain(&roll_pid,&gyro_x_pid);
 
-//偏航角的PID计算
-//需要把摇杆1000的值进行转换,偏航角目标值（带死区）
-yaw_pid.desire=app_stick_to_angle(remote_snapshot.yaw);
-//外环的测量值为当前的偏航角
-yaw_pid.measure=euler_angle.yaw;
-//内环的测量值为当前的偏航角角速度
-gyro_z_pid.measure=(accel_gyro_data.Gyro.Gyro_z*2000.0/32767.0);
-//进行串级PID计算
-com_pid_calc_chain(&yaw_pid,&gyro_z_pid);
+    //偏航角的PID计算
+    //需要把摇杆1000的值进行转换,偏航角目标值（带死区）
+    yaw_pid.desire=app_stick_to_angle(remote_snapshot.yaw);
+    //外环的测量值为当前的偏航角
+    yaw_pid.measure=euler_angle.yaw;
+    //内环的测量值为当前的偏航角角速度
+    gyro_z_pid.measure=(accel_gyro_data.Gyro.Gyro_z*2000.0/32767.0);
+    //进行串级PID计算
+    com_pid_calc_chain(&yaw_pid,&gyro_z_pid);
 }
 
 void app_flight_pid_reset(void)
 {
-	com_pid_reset(&pitch_pid);
-	com_pid_reset(&gyro_y_pid);
-	com_pid_reset(&roll_pid);
-	com_pid_reset(&gyro_x_pid);
-	com_pid_reset(&yaw_pid);
-	com_pid_reset(&gyro_z_pid);
-	com_pid_reset(&height_pid);
+    com_pid_reset(&pitch_pid);
+    com_pid_reset(&gyro_y_pid);
+    com_pid_reset(&roll_pid);
+    com_pid_reset(&gyro_x_pid);
+    com_pid_reset(&yaw_pid);
+    com_pid_reset(&gyro_z_pid);
+    com_pid_reset(&height_pid);
 }
 
-void app_flight_motor_process()
+void app_flight_motor_process(const remote_data *control)
 {
-    remote_data remote_snapshot = remote_data_receive;
+    remote_data remote_snapshot = *control;
     if (remote_snapshot.shutdown == 1)
     {
         motor_left_down.speed = 0;
@@ -263,72 +291,82 @@ void app_flight_motor_process()
     }
     else
     {
-    switch (flight_state)
-    {
-    case IDLE://加锁，让一开始上电电机速度为0
-        motor_left_down.speed = 0;
-        motor_right_down.speed = 0;
-        motor_left_top.speed = 0;
-        motor_right_top.speed = 0;
-        break;
-        case NORMAL:
+        switch (flight_state)
         {
-        int16_t thr = remote_snapshot.thr;
-        float pitch_out = gyro_y_pid.output;
-        float roll_out = gyro_x_pid.output;
-        // 偏航符号修正: 实机桨/电机转向与混控假设相反，导致偏航正反馈(起飞后越转越快)。
-        // 取反 yaw_out 使偏航通道恢复负反馈；若改后反而不稳，说明问题在电机通道映射。
-        float yaw_out = -gyro_z_pid.output;
-
-        // X型混控（布局见 application_freertos_task.c 注释）：
-        // +pitch→前电机(TOP)加速 -pitch→后电机加速
-        // +roll →右电机加速      -roll →左电机加速
-        // +yaw  →对角配对(左上+右下 / 右上+左下)参与
-        // MOTOR_TOP_TRIM / MOTOR_LEFT/RIGHT_TOP_TRIM: 前电机固定补偿(当前清零对照)
-        motor_left_top.speed = app_flight_limit_motor_speed(thr+pitch_out-roll_out+yaw_out+MOTOR_TOP_TRIM+MOTOR_LEFT_TOP_TRIM);
-        motor_right_top.speed = app_flight_limit_motor_speed(thr+pitch_out+roll_out-yaw_out+MOTOR_TOP_TRIM+MOTOR_RIGHT_TOP_TRIM);
-        motor_left_down.speed = app_flight_limit_motor_speed(thr-pitch_out-roll_out-yaw_out);
-        motor_right_down.speed = app_flight_limit_motor_speed(thr-pitch_out+roll_out+yaw_out);
-        }
-        break;
-        case FIX_HEIGHT:
-        //在定高状态下定高的PID作用
-        {
-        int16_t thr = remote_snapshot.thr;
-        float pitch_out = gyro_y_pid.output;
-        float roll_out = gyro_x_pid.output;
-        // 偏航符号修正: 与NORMAL模式一致，取反yaw_out保持负反馈
-        float yaw_out = -gyro_z_pid.output;
-
-        // 定高混控同样叠加 MOTOR_TOP_TRIM 与左/右前额外补偿
-        motor_left_top.speed = app_flight_limit_motor_speed(thr+pitch_out-roll_out+yaw_out+height_pid.output+MOTOR_TOP_TRIM+MOTOR_LEFT_TOP_TRIM);
-        motor_right_top.speed = app_flight_limit_motor_speed(thr + pitch_out + roll_out - yaw_out + height_pid.output + MOTOR_TOP_TRIM + MOTOR_RIGHT_TOP_TRIM);
-        motor_left_down.speed = app_flight_limit_motor_speed(thr - pitch_out - roll_out - yaw_out + height_pid.output);
-        motor_right_down.speed = app_flight_limit_motor_speed(thr - pitch_out + roll_out + yaw_out + height_pid.output);
-        }
-        break;
-        case FAIL:
-            // 处理故障=》一直处理直到满足条件进行任务通知修改飞行状态=》IDLE
-            // 2ms降低电机转速0.17(与原6ms降0.5的物理减速速率一致，约83/s)，直到电机转速为0
+            case IDLE://加锁，让一开始上电电机速度为0
+            motor_left_down.speed = 0;
+            motor_right_down.speed = 0;
+            motor_left_top.speed = 0;
+            motor_right_top.speed = 0;
+            break;
+            case NORMAL:
             {
-                motor_left_down.speed = app_flight_limit_motor_speed(motor_left_down.speed - 0.17);
-                motor_right_down.speed = app_flight_limit_motor_speed(motor_right_down.speed - 0.17);
-                motor_left_top.speed = app_flight_limit_motor_speed(motor_left_top.speed - 0.17);
-                motor_right_top.speed = app_flight_limit_motor_speed(motor_right_top.speed - 0.17);
-                if (motor_left_down.speed == 0 && motor_right_down.speed == 0 && motor_left_top.speed == 0 && motor_right_top.speed == 0)
+                int16_t thr = remote_snapshot.thr;
+                float pitch_out = gyro_y_pid.output;
+                float roll_out = gyro_x_pid.output;
+                // 偏航符号修正: 实机桨/电机转向与混控假设相反，导致偏航正反馈(起飞后越转越快)。
+                // 取反 yaw_out 使偏航通道恢复负反馈；若改后反而不稳，说明问题在电机通道映射。
+                float yaw_out = -gyro_z_pid.output;
+
+                // X型混控（布局见 application_freertos_task.c 注释）：
+                // +pitch→前电机(TOP)加速 -pitch→后电机加速
+                // +roll →右电机加速      -roll →左电机加速
+                // +yaw  →对角配对(左上+右下 / 右上+左下)参与
+                // MOTOR_TOP_TRIM / MOTOR_LEFT/RIGHT_TOP_TRIM: 前电机固定补偿(当前清零对照)
+                motor_left_top.speed = app_flight_limit_motor_speed(thr+pitch_out-roll_out+yaw_out+MOTOR_TOP_TRIM+MOTOR_LEFT_TOP_TRIM);
+                motor_right_top.speed = app_flight_limit_motor_speed(thr+pitch_out+roll_out-yaw_out+MOTOR_TOP_TRIM+MOTOR_RIGHT_TOP_TRIM);
+                motor_left_down.speed = app_flight_limit_motor_speed(thr-pitch_out-roll_out-yaw_out);
+                motor_right_down.speed = app_flight_limit_motor_speed(thr-pitch_out+roll_out+yaw_out);
+            }
+            break;
+            case FIX_HEIGHT:
+            //在定高状态下定高的PID作用
+            {
+                int16_t thr = remote_snapshot.thr;
+                float pitch_out = gyro_y_pid.output;
+                float roll_out = gyro_x_pid.output;
+                // 偏航符号修正: 与NORMAL模式一致，取反yaw_out保持负反馈
+                float yaw_out = -gyro_z_pid.output;
+
+                // 定高混控同样叠加 MOTOR_TOP_TRIM 与左/右前额外补偿
+                motor_left_top.speed = app_flight_limit_motor_speed(thr+pitch_out-roll_out+yaw_out+height_pid.output+MOTOR_TOP_TRIM+MOTOR_LEFT_TOP_TRIM);
+                motor_right_top.speed = app_flight_limit_motor_speed(thr + pitch_out + roll_out - yaw_out + height_pid.output + MOTOR_TOP_TRIM + MOTOR_RIGHT_TOP_TRIM);
+                motor_left_down.speed = app_flight_limit_motor_speed(thr - pitch_out - roll_out - yaw_out + height_pid.output);
+                motor_right_down.speed = app_flight_limit_motor_speed(thr - pitch_out + roll_out + yaw_out + height_pid.output);
+            }
+            break;
+            case FAIL:
+            /* CCR Ϊ�������ۼ� tick ������ 83 CCR/s �½�������ÿ�Ľضϳ� 1�� */
+            {
+                TickType_t now = xTaskGetTickCount();
+                TickType_t elapsed = now - fail_last_tick;
+                uint32_t decrement;
+                fail_last_tick = now;
+                if (motor_last_state != FAIL)
                 {
-                    // 通知飞行任务处理完成
-                    xTaskNotifyGive(flight_remote_control_handle);
+                    elapsed = 0;
+                    fail_credit = 0;
                 }
+                if (elapsed > 13 * configTICK_RATE_HZ)
+                {
+                    elapsed = 13 * configTICK_RATE_HZ;
+                }
+                fail_credit += (uint32_t)elapsed * 83;
+                decrement = fail_credit / configTICK_RATE_HZ;
+                fail_credit %= configTICK_RATE_HZ;
+                motor_left_down.speed = app_flight_limit_motor_speed(motor_left_down.speed - (int32_t)decrement);
+                motor_right_down.speed = app_flight_limit_motor_speed(motor_right_down.speed - (int32_t)decrement);
+                motor_left_top.speed = app_flight_limit_motor_speed(motor_left_top.speed - (int32_t)decrement);
+                motor_right_top.speed = app_flight_limit_motor_speed(motor_right_top.speed - (int32_t)decrement);
             }
             break;
 
-        default:
+            default:
             break;
         }
     }
     // 设置安全机制，如果油门小于50=》电机速度为0
-    if (remote_snapshot.thr < 50)
+    if (flight_state != FAIL && remote_snapshot.thr < 50)
     {
         motor_left_down.speed=0;
         motor_right_down.speed=0;
@@ -341,25 +379,135 @@ void app_flight_motor_process()
     timer_motor_speed(&motor_right_down);
     timer_motor_speed(&motor_left_top);
     timer_motor_speed(&motor_right_top);
+    motor_last_state = flight_state;
+    /* ��·�����ʵ��д�����˳� FAIL�������������̼��ٹ��̡� */
+    if (flight_state == FAIL && motor_left_down.speed == 0 && motor_right_down.speed == 0
+    && motor_left_top.speed == 0 && motor_right_top.speed == 0)
+    {
+        app_flight_pid_reset();
+        flight_state = IDLE;
+    }
 }
 
-void app_fixed_height_pid_process()
+void app_fixed_height_pid_process(void)
 {
-//测量周期约为6ms(每3个控制周期执行一次)，用真实周期修正PID
+    //测量周期约为6ms(每3个控制周期执行一次)，用真实周期修正PID
     static TickType_t s_last_h_tick = 0;
     TickType_t now = xTaskGetTickCount();
-    float h_dt = (s_last_h_tick == 0) ? 0.006f : ((float)(now - s_last_h_tick)) / 1000.0f;
+    float h_dt = 0.006f;
+    if (s_last_h_tick != 0)
+    {
+        h_dt = (float)(now - s_last_h_tick) / configTICK_RATE_HZ;
+    }
     s_last_h_tick = now;
-    if (h_dt < 0.005f) h_dt = 0.005f;
-    if (h_dt > 0.05f)  h_dt = 0.05f;
+    if (h_dt < 0.005f)
+    {
+        h_dt = 0.005f;
+    }
+    if (h_dt > 0.05f)
+    {
+        h_dt = 0.05f;
+    }
     height_pid.dt = h_dt;
 
-//PID的目标值为定高时记录的气压值，测量值为当前的气压值(飞行任务已周期性缓存)
-height_pid.desire=fix_height_pressure;
-height_pid.measure=spl_process_pressure(spl006_pressure, spl006_temperature, &spl006_compensated_pressure);
-//进行PID计算
-com_pid_calc(&height_pid);
+    //PID的目标值为定高时记录的气压值，测量值为当前的气压值(飞行任务已周期性缓存)
+    height_pid.desire=fix_height_pressure;
+    height_pid.measure=spl_process_pressure(spl006_pressure, spl006_temperature, &spl006_compensated_pressure);
+    //进行PID计算
+    com_pid_calc(&height_pid);
 }
 
 
 
+
+static void app_flight_idle_trim(void)
+{
+    static uint8_t still_cnt;
+    static int32_t trim_sum_x, trim_sum_y, trim_sum_z;
+    static uint16_t trim_cnt;
+    if (flight_state == IDLE && motor_left_top.speed == 0 && motor_right_top.speed == 0
+    && motor_left_down.speed == 0 && motor_right_down.speed == 0
+    && abs(accel_gyro_data.Gyro.Gyro_x) < 50 && abs(accel_gyro_data.Gyro.Gyro_y) < 50
+    && abs(accel_gyro_data.Gyro.Gyro_z) < 50)
+    {
+        if (still_cnt < 250)
+        {
+            still_cnt++;
+        }
+        if (still_cnt >= 250)
+        {
+            trim_sum_x += accel_gyro_data.Gyro.Gyro_x;
+            trim_sum_y += accel_gyro_data.Gyro.Gyro_y;
+            trim_sum_z += accel_gyro_data.Gyro.Gyro_z;
+            trim_cnt++;
+            if (trim_cnt >= 100)
+            {
+                my_mpu6050_gyro_trim((int16_t)(trim_sum_x / 100), (int16_t)(trim_sum_y / 100), (int16_t)(trim_sum_z / 100));
+                trim_sum_x = trim_sum_y = trim_sum_z = 0;
+                trim_cnt = 0;
+            }
+        }
+    }
+    else
+    {
+        still_cnt = 0;
+        trim_sum_x = trim_sum_y = trim_sum_z = 0;
+        trim_cnt = 0;
+    }
+}
+
+void app_flight_cycle(void)
+{
+    static Remote_State last_remote_state = REMOTE_DISCONNECTED;
+    static uint8_t spl_count;
+    remote_snapshot_struct snapshot;
+    application_remote_snapshot(&snapshot);
+    application_process_connect_state(&snapshot);
+
+    /* ֻ������ͣ���� IDLE У׼���� FAIL ��������������������ӱ��ء� */
+    if (remote_state == REMOTE_CONNECTED && last_remote_state != REMOTE_CONNECTED
+    && flight_state == IDLE && motor_left_top.speed == 0 && motor_right_top.speed == 0
+    && motor_left_down.speed == 0 && motor_right_down.speed == 0 && imu_ready)
+    {
+        imu_calibrated = (my_mpu6050_zero_offset() == 0);
+    }
+    last_remote_state = remote_state;
+    application_process_flight_state(&snapshot, imu_ready && imu_calibrated);
+
+    if (flight_state != FAIL && imu_ready)
+    {
+        if (app_flight_get_euler_angle() != 0)
+        {
+            /* ���β���ʧ�ܺ��ֹ�Ծ���̬���� PID��ͣ�������������������� */
+            imu_ready = 0;
+            imu_calibrated = 0;
+            flight_state = IDLE;
+            app_flight_pid_reset();
+        }
+    }
+    if (imu_ready)
+    {
+        app_flight_idle_trim();
+    }
+    application_process_connect_state(&snapshot);
+    if ((flight_state == NORMAL || flight_state == FIX_HEIGHT) && snapshot.control.thr >= 50)
+    {
+        app_flight_pid_process(&snapshot.control);
+    }
+    if (flight_state != FAIL && imu_ready)
+    {
+        spl_count++;
+        if (spl_count >= 3)
+        {
+            spl_count = 0;
+            spl_update_data();
+            if (flight_state == FIX_HEIGHT)
+            {
+                app_fixed_height_pid_process();
+            }
+        }
+    }
+    /* I2C ����������֮���ٴμ����Ч֡���䣬��д PWM�� */
+    application_process_connect_state(&snapshot);
+    app_flight_motor_process(&snapshot.control);
+}

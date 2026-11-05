@@ -106,21 +106,22 @@
 //电源管理寄存器1
 #define MPU6050_REG_PWR_MGMT_1 0x6B
 
-void my_mpu6050_init(void);
+/* ״̬���أ�0 �ɹ���1 ʧ�ܣ���ȡʧ�ܲ��޸������У׼ʧ�ܲ��ύƫ�ơ� */
+uint8_t my_mpu6050_init(void);
 //零偏校准：要求飞机静止时调用(阻塞)。不再于上电初始化时自动执行，
 //改由飞行任务在遥控器连接成功(REMOTE_CONNECTED)后触发一次
-void my_mpu6050_zero_offset(void);
+uint8_t my_mpu6050_zero_offset(void);
 //静止时增量微调陀螺仪零偏：把当前角速度读数当作残余零偏累加进offset，
 //用于消除yaw积分零漂(偏航无绝对参考，只能靠陀螺仪零点准)
 void my_mpu6050_gyro_trim(int16_t gyro_x, int16_t gyro_y, int16_t gyro_z);
-void my_mpu6050_write_reg(uint8_t reg, uint8_t data);
-void my_mpu6050_read_reg(uint8_t reg,uint8_t *data);
+uint8_t my_mpu6050_write_reg(uint8_t reg, uint8_t data);
+uint8_t my_mpu6050_read_reg(uint8_t reg,uint8_t *data);
 //读取三轴角速度
-void my_mpu6050_get_gyro(Gyro_struct *gyro);
+uint8_t my_mpu6050_get_gyro(Gyro_struct *gyro);
 //读取三轴加速度
-void my_mpu6050_get_accel(Accel_struct *accel);
+uint8_t my_mpu6050_get_accel(Accel_struct *accel);
 // 读取所有数据
-void my_mpu6050_get_data(Accel_Gyro_struct *accel_gyro);
+uint8_t my_mpu6050_get_data(Accel_Gyro_struct *accel_gyro);
 
 
 

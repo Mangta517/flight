@@ -26,13 +26,8 @@
 #define flight_remote_control_PRIORITY 4
 #define flight_remote_control_period 10
 
-#define power_task_STACK_SIZE 128
-#define power_task_PRIORITY 4
 
 //启动freertos任务系统
-void shutdown_task(void);
-void open_task(void);
-void power_task(void *parameter);
 void application_freertos_start(void);
 void flight_task(void *parameter);
 void led_task(void *parameter);

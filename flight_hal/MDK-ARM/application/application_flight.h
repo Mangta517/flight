@@ -36,15 +36,16 @@
  * ============================================================ */
 #define ROLL_TRIM_DEG  0.0f
 
-void app_flight_init(void);
+uint8_t app_flight_init(void);
+void app_flight_cycle(void);
 //根据陀螺仪数据计算欧拉角
-void app_flight_get_euler_angle(void);
+uint8_t app_flight_get_euler_angle(void);
 //根据欧拉角计算PID
-void app_flight_pid_process(void);
+void app_flight_pid_process(const remote_data *control);
 //重置所有PID积分，防止积分饱和
 void app_flight_pid_reset(void);
 //根据PID值设置电机速度
-void app_flight_motor_process(void);
+void app_flight_motor_process(const remote_data *control);
 //进入定高功能后的PID
 void app_fixed_height_pid_process(void);
 

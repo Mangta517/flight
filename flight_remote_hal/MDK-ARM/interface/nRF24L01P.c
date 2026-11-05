@@ -36,10 +36,20 @@ void Int_nRF24L01P_Init(void)
 	debug_printf("nRF24L01P init success\r\n");
 }
 
+static uint8_t spi_failed;
+static uint8_t tx_mode_failed;
+
 static uint8_t SPI_RW(uint8_t byte)
 {
-	uint8_t rx_data;
-	HAL_SPI_TransmitReceive(&hspi2, &byte, &rx_data, 1, 1000);
+	uint8_t rx_data = 0;
+    if (spi_failed)
+    {
+        return 0;
+    }
+	if (HAL_SPI_TransmitReceive(&hspi2, &byte, &rx_data, 1, 2) != HAL_OK)
+    {
+        spi_failed = 1;
+    }
 	return rx_data;
 }
 
@@ -129,6 +139,7 @@ uint8_t Int_nRF24L01P_Read_Buf(uint8_t reg, uint8_t *pBuf, uint8_t size)
 *********************************************************/
 void Int_nRF24L01P_RX_Mode(void)
 {
+    spi_failed = 0;
 	CE_LOW;
 	Int_nRF24L01P_Write_Buf(nRF24R1_WRITE_REG + RX_ADDR_P0, TX_ADDRESS, TX_ADR_WIDTH); // �����豸����ͨ��0ʹ�úͷ����豸��ͬ�ķ��͵�ַ
 	Int_nRF24L01P_Write_Reg(nRF24R1_WRITE_REG + EN_AA, 0x01);						   // ʹ�ܽ���ͨ��0�Զ�Ӧ��
@@ -148,6 +159,7 @@ void Int_nRF24L01P_RX_Mode(void)
 *********************************************************/
 void Int_nRF24L01P_TX_Mode(void)
 {
+    spi_failed = 0;
 	CE_LOW;
 	Int_nRF24L01P_Write_Buf(nRF24R1_WRITE_REG + TX_ADDR, TX_ADDRESS, TX_ADR_WIDTH);	   // д뷢͵ַ
 	Int_nRF24L01P_Write_Buf(nRF24R1_WRITE_REG + RX_ADDR_P0, TX_ADDRESS, TX_ADR_WIDTH); // ΪӦ豸ͨ0ַͷ͵ַͬ
@@ -157,7 +169,11 @@ void Int_nRF24L01P_TX_Mode(void)
 	Int_nRF24L01P_Write_Reg(nRF24R1_WRITE_REG + RF_CH, CHANNEL);					   // ѡƵͨ0x40
 	Int_nRF24L01P_Write_Reg(nRF24R1_WRITE_REG + RF_SETUP, 0x0f);					   // ݴ2Mbps书0dBmŴ(nRF24L01+Ըλ
 	Int_nRF24L01P_Write_Reg(nRF24R1_WRITE_REG + CONFIG, 0x0e);						   // CRCʹܣ16λCRCУ飬ϵ
-	CE_HIGH;
+	tx_mode_failed = spi_failed;
+    if (!spi_failed)
+    {
+        CE_HIGH;
+    }
 }
 
 /********************************************************
@@ -168,6 +184,7 @@ void Int_nRF24L01P_TX_Mode(void)
 *********************************************************/
 uint8_t Int_nRF24L01P_RxPacket(uint8_t *rxbuf)
 {
+    spi_failed = 0;
 	uint8_t state;
 	// 因为状态寄存器的标志位设计为写1清除，所以每次读取状态寄存器后都要写回去清除标志位，否则会一直保持之前的状态，导致无法正确判断是否有新的数据到来。
 	state = Int_nRF24L01P_Read_Reg(STATUS);						// ��ȡ״̬�Ĵ�����ֵ
@@ -177,7 +194,7 @@ uint8_t Int_nRF24L01P_RxPacket(uint8_t *rxbuf)
 	{
 		Int_nRF24L01P_Read_Buf(RD_RX_PLOAD, rxbuf, TX_PLOAD_WIDTH); // ��ȡ����
 		Int_nRF24L01P_Write_Reg(FLUSH_RX, 0xff);					// RX FIFOĴ
-		return 0;
+		return spi_failed;
 	}
 	return 1; // û�յ��κ�����
 }
@@ -188,28 +205,35 @@ uint8_t Int_nRF24L01P_RxPacket(uint8_t *rxbuf)
 *********************************************************/
 uint8_t Int_nRF24L01P_TxPacket(uint8_t *txbuf)
 {
-	uint8_t state;
-	CE_LOW;														 // CE���ͣ�ʹ��24L01����
-	Int_nRF24L01P_Write_Buf(WR_TX_PLOAD, txbuf, TX_PLOAD_WIDTH); // дݵTX FIFO,32ֽ
-	CE_HIGH;													 // CEøߣʹܷ
-
-	// while(IRQ == 1);
-	// 不用中断信号，使用轮询等待
-	state = Int_nRF24L01P_Read_Reg(STATUS);
-	while (((state & TX_DS) == 0) && ((state & MAX_RT) == 0)) // ȴ
-	{
-		state = Int_nRF24L01P_Read_Reg(STATUS);
-		vTaskDelay(1); // 等待1ms，避免一直轮询占用CPU资源
-	}															// ȡ״̬Ĵֵ
-	Int_nRF24L01P_Write_Reg(nRF24R1_WRITE_REG + STATUS, state); // TX_DSMAX_RTжϱ־
-	if (state & MAX_RT)											// ﵽط
-	{
-		Int_nRF24L01P_Write_Reg(FLUSH_TX, 0xff); // TX FIFOĴ
-		return 1;
-	}
-	if (state & TX_DS) //
-	{
-		return 0; // 发送成功
-	}
-	return 1; // ����ʧ��
+    uint8_t state = 0;
+    TickType_t start = xTaskGetTickCount();
+    spi_failed = 0;
+    if (tx_mode_failed)
+    {
+        tx_mode_failed = 0;
+        CE_LOW;
+        return 1;
+    }
+    CE_LOW;
+    Int_nRF24L01P_Write_Buf(WR_TX_PLOAD, txbuf, TX_PLOAD_WIDTH);
+    CE_HIGH;
+    /* ��ʹ STATUS ��Զ������ TX_DS/MAX_RT��Ҳ�� 10 ms ���˳��� */
+    while (!spi_failed)
+    {
+        state = Int_nRF24L01P_Read_Reg(STATUS);
+        if ((state & (TX_DS | MAX_RT)) != 0 || spi_failed
+            || (TickType_t)(xTaskGetTickCount() - start) >= pdMS_TO_TICKS(10))
+        {
+            break;
+        }
+        vTaskDelay(1);
+    }
+    CE_LOW;
+    Int_nRF24L01P_Write_Reg(nRF24R1_WRITE_REG + STATUS, TX_DS | MAX_RT);
+    if (spi_failed || (state & MAX_RT) != 0 || (state & TX_DS) == 0)
+    {
+        Int_nRF24L01P_Write_Reg(FLUSH_TX, 0xff);
+        return 1;
+    }
+    return 0;
 }

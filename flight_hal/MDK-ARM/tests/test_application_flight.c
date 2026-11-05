@@ -1,288 +1,387 @@
-/**
- * @file test_application_flight.c
- * @brief application_flight 模块单元测试 - app_flight_init 函数
- * 
- * 测试覆盖:
- * - 正常初始化流程: MPU6050 + 4个电机启动
- * - 函数调用顺序验证
- * - 调用次数验证
- */
-
+/* Link the real application/receiver/PID; mock only their dependencies. */
+#include "application_flight.h"
+#include <assert.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include "unity.h"
-
-/* ========== Mock 状态追踪 ========== */
-static int mock_mpu6050_init_call_count = 0;
-static int mock_motor_start_call_count = 0;
-static motor_struct* last_motor_ptr[4] = {NULL, NULL, NULL, NULL};
-static int motor_start_index = 0;
-
-/* ========== Mock 函数声明 ========== */
-void my_mpu6050_init(void);
-void motor_start(motor_struct *motor);
-
-/* ========== 类型定义 (从项目头文件提取) ========== */
-typedef struct {
-    void* htim;          /* TIM_HandleTypeDef* - 简化为void*用于测试 */
-    uint16_t channel;
-    uint16_t speed;
-} motor_struct;
-
-/* ========== 全局变量定义 (模拟外部变量) ========== */
-motor_struct motor_left_top = {NULL, 0, 0};
-motor_struct motor_right_top = {NULL, 0, 0};
-motor_struct motor_right_down = {NULL, 0, 0};
-motor_struct motor_left_down = {NULL, 0, 0};
-
-/* ========== Mock 函数实现 ========== */
-/**
- * @brief Mock MPU6050 初始化函数
- * 追踪调用次数
- */
-void my_mpu6050_init(void) {
-    mock_mpu6050_init_call_count++;
-}
-
-/**
- * @brief Mock 电机启动函数
- * 追踪调用次数和传入的电机指针
- */
-void motor_start(motor_struct *motor) {
-    if (motor_start_index < 4) {
-        last_motor_ptr[motor_start_index] = motor;
-    }
-    mock_motor_start_call_count++;
-    motor_start_index++;
-}
-
-/* ========== 待测函数原型 (包含原始实现) ========== */
-void app_flight_init(void)
+TIM_HandleTypeDef htim2;
+motor_struct motor_left_top = {&htim2, 2, 0};
+motor_struct motor_right_top = {&htim2, 1, 0};
+motor_struct motor_right_down = {&htim2, 0, 0};
+motor_struct motor_left_down = {&htim2, 3, 0};
+Remote_State remote_state = REMOTE_DISCONNECTED;
+Flight_State flight_state = IDLE;
+volatile remote_data remote_data_receive = {0, 500, 500, 500, 0, 0};
+int32_t fix_height_pressure, spl006_pressure, spl006_temperature, spl006_compensated_pressure;
+KalmanFilter_Struct kfs[3];
+extern pid_struct pitch_pid;
+static TickType_t tick = 10;
+static uint8_t packet[TX_PLOAD_WIDTH];
+static int calibration_calls, starts, imu_calls, attitude_calls, writes, depth, trim_calls;
+static uint8_t init_error, read_error, calibration_error, inject_frame;
+static uint32_t calibration_delay, tx_delay, read_delay;
+static int16_t written[4];
+void test_enter_critical(void)
 {
-    /* MPU6050初始化 */
-    my_mpu6050_init();
-    
-    /* 电机初始化 - 4个电机 */
-    motor_start(&motor_left_top);
-    motor_start(&motor_right_top);
-    motor_start(&motor_right_down);
-    motor_start(&motor_left_down);
+    assert(depth == 0);
+    depth++;
 }
-
-/* ========== 测试辅助函数 ========== */
-/**
- * @brief 重置所有Mock状态
- * 每个测试前调用，确保测试独立性
- */
-void reset_mock_state(void) {
-    mock_mpu6050_init_call_count = 0;
-    mock_motor_start_call_count = 0;
-    motor_start_index = 0;
-    for (int i = 0; i < 4; i++) {
-        last_motor_ptr[i] = NULL;
+void test_exit_critical(void)
+{
+    assert(depth == 1);
+    depth--;
+}
+TickType_t xTaskGetTickCount(void)
+{
+    return tick;
+}
+uint8_t my_mpu6050_init(void)
+{
+    return init_error;
+}
+uint8_t my_mpu6050_get_data(Accel_Gyro_struct *data)
+{
+    imu_calls++;
+    tick += read_delay;
+    if (read_error)
+    {
+        return 1;
+    }
+    *data = (Accel_Gyro_struct){0};
+    data->Accel.Accel_z = 16384;
+    return 0;
+}
+uint8_t my_mpu6050_zero_offset(void)
+{
+    assert(flight_state == IDLE);
+    assert(motor_left_top.speed == 0 && motor_right_top.speed == 0);
+    assert(motor_left_down.speed == 0 && motor_right_down.speed == 0);
+    calibration_calls++;
+    tick += calibration_delay;
+    return calibration_error;
+}
+void my_mpu6050_gyro_trim(int16_t x, int16_t y, int16_t z)
+{
+    assert(flight_state == IDLE);
+    assert(motor_left_top.speed == 0 && motor_right_top.speed == 0);
+    assert(motor_left_down.speed == 0 && motor_right_down.speed == 0);
+    trim_calls++;
+}
+void motor_start(motor_struct *motor)
+{
+    assert(motor->htim == &htim2);
+    starts++;
+}
+void timer_motor_speed(motor_struct *motor)
+{
+    written[motor->channel] = motor->speed;
+    writes++;
+}
+int16_t Common_Filter_LowPass(int16_t value, int16_t old)
+{
+    return value;
+}
+double Common_Filter_KalmanFilter(KalmanFilter_Struct *filter, double value)
+{
+    return value;
+}
+static void receive(int16_t throttle);
+void Common_IMU_GetEulerAngle(Accel_Gyro_struct *data, Euler_struct *angle, float dt)
+{
+    assert(dt > 0 && dt <= 0.02f);
+    attitude_calls++;
+    *angle = (Euler_struct){0};
+    if (inject_frame)
+    {
+        inject_frame = 0;
+        receive(900);
     }
 }
-
-/* ========== 单元测试用例 ========== */
-
-/**
- * @test 测试正常初始化流程
- * @expected:
- *   - my_mpu6050_init 被调用1次
- *   - motor_start 被调用4次
- */
-void test_app_flight_init_normal(void) {
-    /* Given: 重置状态 */
-    reset_mock_state();
-    
-    /* When: 执行初始化函数 */
-    app_flight_init();
-    
-    /* Then: 验证MPU6050初始化被调用1次 */
-    TEST_ASSERT_EQUAL_INT(1, mock_mpu6050_init_call_count);
-    
-    /* And: 验证电机启动被调用4次 */
-    TEST_ASSERT_EQUAL_INT(4, mock_motor_start_call_count);
+int spl_process_pressure(int32_t pressure, int32_t temperature, int32_t *result)
+{
+    *result = pressure;
+    return pressure;
 }
-
-/**
- * @test 测试MPU6050初始化优先于电机初始化
- * @expected: MPU6050先于任何电机启动
- */
-void test_app_flight_init_mpu6050_first(void) {
-    /* Given: 重置状态 */
-    reset_mock_state();
-    int mpu_called_before_motor = 0;
-    
-    /* 使用自定义mock检测顺序 */
-    mock_mpu6050_init_call_count = 0;
-    mock_motor_start_call_count = 0;
-    
-    /* When: 执行初始化 */
-    app_flight_init();
-    
-    /* Then: 验证在第一个motor_start被调用前，mpu6050_init已被调用 */
-    TEST_ASSERT_EQUAL_INT(1, mock_mpu6050_init_call_count);
-    TEST_ASSERT_EQUAL_INT(4, mock_motor_start_call_count);
+void spl_update_data(void)
+{
 }
-
-/**
- * @test 测试4个电机按正确顺序初始化
- * @expected: 顺序为 left_top -> right_top -> right_down -> left_down
- */
-void test_app_flight_init_motor_order(void) {
-    /* Given: 重置状态 */
-    reset_mock_state();
-    
-    /* When: 执行初始化 */
-    app_flight_init();
-    
-    /* Then: 验证电机启动顺序 */
-    TEST_ASSERT_NOT_NULL(last_motor_ptr[0]);
-    TEST_ASSERT_NOT_NULL(last_motor_ptr[1]);
-    TEST_ASSERT_NOT_NULL(last_motor_ptr[2]);
-    TEST_ASSERT_NOT_NULL(last_motor_ptr[3]);
-    
-    TEST_ASSERT_EQUAL_PTR(&motor_left_top, last_motor_ptr[0]);
-    TEST_ASSERT_EQUAL_PTR(&motor_right_top, last_motor_ptr[1]);
-    TEST_ASSERT_EQUAL_PTR(&motor_right_down, last_motor_ptr[2]);
-    TEST_ASSERT_EQUAL_PTR(&motor_left_down, last_motor_ptr[3]);
+uint8_t Int_nRF24L01P_RxPacket(uint8_t *data)
+{
+    for (unsigned i = 0; i < sizeof(packet); i++)
+    {
+        data[i] = packet[i];
+    }
+    return 0;
 }
-
-/**
- * @test 测试所有4个不同电机都被初始化
- * @expected: 4个电机指针互不相同
- */
-void test_app_flight_init_all_motors_unique(void) {
-    /* Given: 重置状态 */
-    reset_mock_state();
-    
-    /* When: 执行初始化 */
-    app_flight_init();
-    
-    /* Then: 验证4个电机是不同的实例 */
-    TEST_ASSERT_TRUE(last_motor_ptr[0] != last_motor_ptr[1]);
-    TEST_ASSERT_TRUE(last_motor_ptr[1] != last_motor_ptr[2]);
-    TEST_ASSERT_TRUE(last_motor_ptr[2] != last_motor_ptr[3]);
-    TEST_ASSERT_TRUE(last_motor_ptr[0] != last_motor_ptr[3]);
+void Int_nRF24L01P_TX_Mode(void)
+{
 }
-
-/**
- * @test 测试重复初始化的幂等性
- * @expected: 每次调用都完整执行所有初始化
- */
-void test_app_flight_init_idempotent(void) {
-    /* Given: 重置状态并执行第一次初始化 */
-    reset_mock_state();
-    app_flight_init();
-    
-    int first_mpu_calls = mock_mpu6050_init_call_count;
-    int first_motor_calls = mock_motor_start_call_count;
-    
-    /* When: 再次执行初始化 */
-    app_flight_init();
-    
-    /* Then: 调用计数应该翻倍 */
-    TEST_ASSERT_EQUAL_INT(first_mpu_calls * 2, mock_mpu6050_init_call_count);
-    TEST_ASSERT_EQUAL_INT(first_motor_calls * 2, mock_motor_start_call_count);
+void Int_nRF24L01P_RX_Mode(void)
+{
 }
-
-/**
- * @test 测试左上电机参数正确传递
- * @expected: motor_left_top 地址正确传给 motor_start
- */
-void test_app_flight_init_left_top_motor_param(void) {
-    /* Given: 重置状态 */
-    reset_mock_state();
-    
-    /* When: 执行初始化 */
-    app_flight_init();
-    
-    /* Then: 第一个电机应该是左上电机 */
-    TEST_ASSERT_EQUAL_PTR(&motor_left_top, last_motor_ptr[0]);
+uint8_t Int_nRF24L01P_TxPacket(uint8_t *data)
+{
+    tick += tx_delay;
+    return 1;
 }
-
-/**
- * @test 测试右上电机参数正确传递
- * @expected: motor_right_top 地址正确传给 motor_start
- */
-void test_app_flight_init_right_top_motor_param(void) {
-    /* Given: 重置状态 */
-    reset_mock_state();
-    
-    /* When: 执行初始化 */
-    app_flight_init();
-    
-    /* Then: 第二个电机应该是右上电机 */
-    TEST_ASSERT_EQUAL_PTR(&motor_right_top, last_motor_ptr[1]);
+static void checksum(void)
+{
+    uint32_t sum = 0;
+    for (unsigned i = 0; i < TX_PLOAD_WIDTH - 4; i++)
+    {
+        sum += packet[i];
+    }
+    for (unsigned i = 0; i < 4; i++)
+    {
+        packet[TX_PLOAD_WIDTH - 4 + i] = sum >> (24 - 8 * i);
+    }
 }
-
-/**
- * @test 测试右下电机参数正确传递
- * @expected: motor_right_down 地址正确传给 motor_start
- */
-void test_app_flight_init_right_down_motor_param(void) {
-    /* Given: 重置状态 */
-    reset_mock_state();
-    
-    /* When: 执行初始化 */
-    app_flight_init();
-    
-    /* Then: 第三个电机应该是右下电机 */
-    TEST_ASSERT_EQUAL_PTR(&motor_right_down, last_motor_ptr[2]);
+static void frame(int16_t throttle)
+{
+    packet[0] = 'h';
+    packet[1] = 'y';
+    packet[2] = 'f';
+    int16_t controls[] = {throttle, 500, 500, 500};
+    for (unsigned i = 0; i < 4; i++)
+    {
+        packet[3 + 2 * i] = controls[i] >> 8;
+        packet[4 + 2 * i] = controls[i] & 255;
+    }
+    packet[11] = 0;
+    packet[12] = 0;
+    checksum();
 }
-
-/**
- * @test 测试左下电机参数正确传递
- * @expected: motor_left_down 地址正确传给 motor_start
- */
-void test_app_flight_init_left_down_motor_param(void) {
-    /* Given: 重置状态 */
-    reset_mock_state();
-    
-    /* When: 执行初始化 */
-    app_flight_init();
-    
-    /* Then: 第四个电机应该是左下电机 */
-    TEST_ASSERT_EQUAL_PTR(&motor_left_down, last_motor_ptr[3]);
+static void receive(int16_t throttle)
+{
+    frame(throttle);
+    assert(application_recevie_data() == 0);
 }
-
-/**
- * @test 边界测试 - 验证无多余调用
- * @expected: 除预期外无额外函数调用
- */
-void test_app_flight_init_no_extra_calls(void) {
-    /* Given: 重置状态 */
-    reset_mock_state();
-    
-    /* When: 执行初始化 */
-    app_flight_init();
-    
-    /* Then: 总调用数应为 1(MPU6050) + 4(电机) = 5 */
-    TEST_ASSERT_EQUAL_INT(1, mock_mpu6050_init_call_count);
-    TEST_ASSERT_EQUAL_INT(4, mock_motor_start_call_count);
-    TEST_ASSERT_EQUAL_INT(5, mock_mpu6050_init_call_count + mock_motor_start_call_count);
+static void prepare(void)
+{
+    assert(app_flight_init() == 0 && starts == 4);
+    receive(0);
+    app_flight_cycle();
+    assert(calibration_calls == 1 && flight_state == IDLE);
 }
-
-/* ========== 主测试入口 ========== */
-int main(int argc, char** argv) {
-    UNITY_BEGIN();
-    
-    printf("\n========== app_flight_init 单元测试开始 ==========\n");
-    
-    RUN_TEST(test_app_flight_init_normal);
-    RUN_TEST(test_app_flight_init_mpu6050_first);
-    RUN_TEST(test_app_flight_init_motor_order);
-    RUN_TEST(test_app_flight_init_all_motors_unique);
-    RUN_TEST(test_app_flight_init_idempotent);
-    RUN_TEST(test_app_flight_init_left_top_motor_param);
-    RUN_TEST(test_app_flight_init_right_top_motor_param);
-    RUN_TEST(test_app_flight_init_right_down_motor_param);
-    RUN_TEST(test_app_flight_init_left_down_motor_param);
-    RUN_TEST(test_app_flight_init_no_extra_calls);
-    
-    printf("========== app_flight_init 单元测试结束 ==========\n\n");
-    
-    return UNITY_END();
+static void set_motors(int16_t speed)
+{
+    motor_left_top.speed = speed;
+    motor_right_top.speed = speed;
+    motor_left_down.speed = speed;
+    motor_right_down.speed = speed;
+}
+static void assert_stopped(void)
+{
+    for (unsigned i = 0; i < 4; i++)
+    {
+        assert(written[i] == 0);
+    }
+}
+int main(int argc, char **argv)
+{
+    assert(argc == 2);
+    const char *test = argv[1];
+    if (strcmp(test, "init_failure") == 0)
+    {
+        init_error = 1;
+        assert(app_flight_init() == 1);
+        receive(1000);
+        app_flight_cycle();
+        assert(calibration_calls == 0 && imu_calls == 0);
+        assert_stopped();
+    }
+    else if (strcmp(test, "calibration") == 0)
+    {
+        calibration_delay = 600;
+        prepare();
+        assert(remote_state == REMOTE_DISCONNECTED);
+        assert_stopped();
+        receive(500);
+        app_flight_cycle();
+        flight_state = NORMAL;
+        set_motors(500);
+        tick += 80;
+        app_flight_cycle();
+        receive(500);
+        app_flight_cycle();
+        assert(calibration_calls == 1 && flight_state == FAIL);
+    }
+    else if (strcmp(test, "calibration_failure") == 0)
+    {
+        calibration_error = 1;
+        prepare();
+        for (int i = 0; i < 2500; i++)
+        {
+            tick++;
+            receive(1000);
+            app_flight_cycle();
+        }
+        receive(0);
+        app_flight_cycle();
+        for (int i = 0; i < 1100; i++)
+        {
+            tick++;
+            receive(0);
+            app_flight_cycle();
+        }
+        assert(flight_state == IDLE);
+        assert_stopped();
+    }
+    else if (strcmp(test, "idle_trim") == 0)
+    {
+        prepare();
+        for (int i = 0; i < 347; i++)
+        {
+            tick += 2;
+            receive(0);
+            app_flight_cycle();
+        }
+        assert(trim_calls == 0);
+        flight_state = NORMAL;
+        set_motors(500);
+        frame(500);
+        packet[11] = 1;
+        checksum();
+        assert(application_recevie_data() == 0);
+        app_flight_cycle();
+        assert(trim_calls == 0);
+        assert_stopped();
+        for (int i = 0; i < 348; i++)
+        {
+            tick += 2;
+            receive(0);
+            app_flight_cycle();
+        }
+        assert(trim_calls == 0);
+        app_flight_cycle();
+        assert(trim_calls == 1);
+    }
+    else if (strcmp(test, "ramp") == 0 || strcmp(test, "wrap") == 0)
+    {
+        if (strcmp(test, "wrap") == 0)
+        {
+            tick = UINT32_MAX - 50;
+        }
+        prepare();
+        receive(500);
+        flight_state = NORMAL;
+        set_motors(500);
+        tick += 80;
+        app_flight_cycle();
+        assert(flight_state == FAIL && motor_left_top.speed == 500);
+        for (int i = 0; i < 500; i++)
+        {
+            tick += 2;
+            receive(0);
+            app_flight_cycle();
+            assert(flight_state == FAIL);
+        }
+        assert(motor_left_top.speed == 417 && calibration_calls == 1);
+        for (int i = 0; i < 3000 && flight_state == FAIL; i++)
+        {
+            tick += 2;
+            receive(1000);
+            app_flight_cycle();
+        }
+        assert(flight_state == IDLE);
+        assert_stopped();
+        app_flight_cycle();
+        assert(flight_state == IDLE);
+        for (int i = 0; i < 1100; i++)
+        {
+            tick++;
+            receive(1000);
+            app_flight_cycle();
+        }
+        receive(0);
+        app_flight_cycle();
+        tick++;
+        receive(0);
+        app_flight_cycle();
+        for (int i = 0; i < 1100; i++)
+        {
+            tick++;
+            receive(0);
+            app_flight_cycle();
+        }
+        assert(flight_state == NORMAL);
+        assert_stopped();
+    }
+    else if (strcmp(test, "freshness") == 0)
+    {
+        prepare();
+        flight_state = NORMAL;
+        set_motors(500);
+        tx_delay = 80;
+        receive(500);
+        app_flight_cycle();
+        assert(flight_state == FAIL);
+    }
+    else if (strcmp(test, "read_failure") == 0)
+    {
+        prepare();
+        flight_state = NORMAL;
+        set_motors(500);
+        int before = attitude_calls;
+        read_error = 1;
+        app_flight_cycle();
+        assert(attitude_calls == before && flight_state == IDLE);
+        assert_stopped();
+        read_error = 0;
+        receive(1000);
+        app_flight_cycle();
+        assert(flight_state == IDLE && attitude_calls == before);
+    }
+    else if (strcmp(test, "read_deadline") == 0)
+    {
+        prepare();
+        flight_state = NORMAL;
+        set_motors(500);
+        read_delay = 80;
+        app_flight_cycle();
+        assert(flight_state == FAIL && motor_left_top.speed == 500);
+    }
+    else if (strcmp(test, "snapshot") == 0)
+    {
+        prepare();
+        receive(500);
+        flight_state = NORMAL;
+        inject_frame = 1;
+        app_flight_cycle();
+        assert(pitch_pid.desire == PITCH_TRIM_DEG);
+        assert(motor_left_top.speed < 600 && remote_data_receive.thr == 900);
+    }
+    else if (strcmp(test, "validation") == 0)
+    {
+        prepare();
+        remote_snapshot_struct before, after;
+        application_remote_snapshot(&before);
+        tick += 5;
+        frame(1001);
+        assert(application_recevie_data() == 1);
+        frame(100);
+        packet[0] = 'x';
+        checksum();
+        assert(application_recevie_data() == 1);
+        frame(100);
+        packet[TX_PLOAD_WIDTH - 4] = 0x80;
+        assert(application_recevie_data() == 1);
+        application_remote_snapshot(&after);
+        assert(after.last_valid_tick == before.last_valid_tick && after.control.thr == 0);
+        frame(100);
+        packet[12] = 1;
+        checksum();
+        assert(application_recevie_data() == 0);
+        receive(200);
+        application_remote_snapshot(&after);
+        assert(after.control.fix_height == 1);
+        application_remote_snapshot(&after);
+        assert(after.control.fix_height == 0);
+    }
+    else
+    {
+        assert(0);
+    }
+    assert(depth == 0 && writes % 4 == 0);
+    printf("PASS flight %s\n", test);
+    return 0;
 }
